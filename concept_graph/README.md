@@ -1,6 +1,6 @@
 # CSV to JSON conversion
 
-[![meaningtowords](https://img.shields.io/badge/batterycsvtojson-v1.0-green)](https://sodium-ion-batteries-metadata-csv-to-json1.streamlit.app/)
+[![meaningtowords](https://img.shields.io/badge/batterycsvtojson-v1.0-blue)](https://sodium-ion-batteries-metadata-csv-to-json1.streamlit.app/)
 
 
 
