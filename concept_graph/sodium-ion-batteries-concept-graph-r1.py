@@ -441,6 +441,8 @@ class RelationshipType(Enum):
     MAPS = "maps"
     SIMULATES = "simulates"
     DETECTS = "detects"
+    MEASURES = "measures"
+    OBSERVES = "observes"
     INTEGRATES = "integrates"
     COUPLES = "couples"
     UPSCALES = "upscales"
@@ -553,6 +555,8 @@ EDGE_COLOR_REGISTRY: Dict[RelationshipType, str] = {
     RelationshipType.SELECTS:           "#D3D3D3",   # light grey
     RelationshipType.INITIATES:         "#696969",   # dim grey
     RelationshipType.DETECTS:           "#556B2F",   # dark olive green
+    RelationshipType.MEASURES:          "#6B8E23",   # olive drab
+    RelationshipType.OBSERVES:          "#808000",   # olive
     RelationshipType.GENERATES:         "#6B8E23",   # olive drab
 }
 
