@@ -6665,39 +6665,32 @@ def main() -> None:
                 display_metric_dashboard(metrics, theme=theme)
             with st.expander("Domain Hierarchy (Sunburst)"):
                 cat_filter = st.session_state.get('sunburst_categories', [])
-                bv_mode = st.session_state.get('sunburst_branchvalues', 'total')
+
+                # Filter concepts based on sidebar selection
                 if cat_filter:
                     filtered_concepts = [
                         c for c in valid_concepts
                         if abstract_concepts_to_categories([c]).get(c, 'general') in cat_filter
                     ]
-                    filtered_map = {
-                        c: concept_abstract_map[c]
-                        for c in filtered_concepts if c in concept_abstract_map
-                    }
                 else:
                     filtered_concepts = valid_concepts
-                    filtered_map = concept_abstract_map
-                labels, parents, values = build_category_hierarchy(
-                    filtered_concepts, filtered_map,
-                    top_n_per_category=st.session_state.get('top_n_sunburst', 0),
+
+                # Create a subgraph containing only the filtered concepts
+                filtered_graph = nx_graph.subgraph(filtered_concepts).copy()
+
+                # Build node weights dictionary from concept_abstract_map
+                node_weights = {c: len(concept_abstract_map.get(c, [])) for c in filtered_concepts}
+
+                # Call the existing render_sunburst_chart with the correct signature
+                fig = render_sunburst_chart(
+                    filtered_graph,
+                    node_weights=node_weights,
+                    min_weight=0.0,
+                    colormap_name=st.session_state.get('sunburst_cmap', cmap),
                 )
-                render_sunburst_chart(
-                    labels, parents, values,
-                    cmap_name=st.session_state.get('sunburst_cmap', cmap),
-                    theme=theme,
-                    branchvalues=bv_mode,
-                    label_size=st.session_state.get('sunburst_label_size') or 20,
-                    width=st.session_state.get('sunburst_width') or 900,
-                    height=st.session_state.get('sunburst_height') or 700,
-                    show_labels=st.session_state.get('sunburst_show_labels', True),
-                    show_values=st.session_state.get('sunburst_show_values', False),
-                    hover_info=st.session_state.get('sunburst_hover_info', 'all'),
-                    font_family=st.session_state.get(
-                        'sunburst_font_family',
-                        st.session_state.get('node_font_face', 'Inter, Segoe UI, Roboto, sans-serif'),
-                    ),
-                )
+
+                # Display the Plotly figure
+                st.plotly_chart(fig, use_container_width=True)
             with st.expander("Concept Radar"):
                 radar_k = st.session_state.get('top_n_radar', 15)
                 if radar_k == 0:
