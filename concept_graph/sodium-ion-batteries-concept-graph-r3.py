@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Sodium-Ion Battery Quantitative Descriptor Graph v6.2 (SIB Edition)
+Sodium-Ion Battery Quantitative Descriptor Graph v6.1 (SIB Edition)
 ====================================================================
 Multi-level reasoning concept graph for numerical/quantitative description
 of Sodium-Ion Batteries (SIBs).
@@ -177,7 +177,7 @@ def timed(func):
 # PAGE CONFIGURATION
 # ============================================================================
 st.set_page_config(
-    page_title="Sodium-Ion Battery Quantitative Descriptor Graph v6.2",
+    page_title="Sodium-Ion Battery Quantitative Descriptor Graph v6.1",
     page_icon="🔋",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -462,38 +462,6 @@ class RelationshipType(Enum):
     ACCELERATES = "accelerates"
     ENFORCES = "enforces"
     CORRELATES = "correlates"
-
-
-# ============================================================================
-# EDGE COLOR MODE ENUM
-# ============================================================================
-class EdgeColorMode(Enum):
-    THEME = "theme"
-    UNIFORM_GREY = "uniform_grey"
-    CUSTOM = "custom"
-
-
-# ============================================================================
-# COLOR LIGHTENING UTILITY
-# ============================================================================
-def lighten_hex_color(hex_color: str, amount: float = 0.0) -> str:
-    """
-    Lighten a hex color by blending with white.
-    amount: 0.0 = no change, 1.0 = pure white
-    """
-    if not hex_color or not hex_color.startswith('#'):
-        return hex_color
-    try:
-        hex_color = hex_color.lstrip('#')
-        r = int(hex_color[0:2], 16)
-        g = int(hex_color[2:4], 16)
-        b = int(hex_color[4:6], 16)
-        r = min(255, int(r + (255 - r) * amount))
-        g = min(255, int(g + (255 - g) * amount))
-        b = min(255, int(b + (255 - b) * amount))
-        return f"#{r:02x}{g:02x}{b:02x}"
-    except Exception:
-        return hex_color
 
 # ============================================================================
 # EDGE COLOR REGISTRY — one distinct color per RelationshipType category
@@ -1085,156 +1053,2381 @@ def get_hierarchy_path(concept_key: str) -> List[str]:
     return ["Sodium-Ion Battery", parent_label, leaf]
 
 
-# --- Symbol Library for Sunburst ---
-SYMBOL_LIBRARY = ['✦', '★', '●', '■', '▲', '◆', '⬟', '⬢', '◉', '◈', 
-                  '✹', '✻', '✽', '❋', '❊', '✤', '✣', '✢', '✡', '✠',
-                  '⬡', '⬠', '⬣', '◐', '◑', '◒', '◓', '◔', '◕', '◖']
-
-
-def build_symbol_chain(node_id: str, parent_id: str, depth: int, 
-                       sibling_index: int = 0,
-                       parent_chain: List[str] = None) -> str:
-    """
-    Build a symbol chain for sunburst labels.
-
-    Depth 0 (root):     "✦"
-    Depth 1 (category): "★" (based on sibling index)
-    Depth 2 (concept):  "★■" (chain of ancestor + own symbol)
-
-    Returns the last 3 symbols for space efficiency.
-    """
-    if depth == 0:
-        return SYMBOL_LIBRARY[0]
-
-    own_symbol = SYMBOL_LIBRARY[(sibling_index + 1) % len(SYMBOL_LIBRARY)]
-
-    if parent_chain:
-        chain = parent_chain + [own_symbol]
-    else:
-        chain = [own_symbol]
-
-    # Display last 3 symbols for space efficiency
-    if len(chain) > 3:
-        return "".join(chain[-3:])
-    return "".join(chain)
-
-
-def build_sunburst_data_v2(
+def build_sunburst_data(
     graph: nx.Graph,
-    concept_abstract_map: Optional[Dict[str, List[int]]] = None,
     node_weights: Optional[Dict[str, float]] = None,
     min_weight: float = 0.0,
-    top_n_per_category: int = 0,
-    use_symbols: bool = False,
-    category_filter: Optional[List[str]] = None,
-) -> Tuple[List[str], List[str], List[float], List[str], List[str], Dict[str, str]]:
+) -> Tuple[List[str], List[str], List[float], List[str]]:
     """
-    Build enhanced sunburst data with symbol support and anti-collision.
+    Build the four arrays needed by ``plotly.sunburst``:
+    ids, labels, values, parents.
+
+    Parameters
+    ----------
+    graph : nx.Graph
+        The concept graph.
+    node_weights : dict or None
+        Mapping concept_key → numeric weight (e.g. frequency, importance).
+        If None, all nodes get weight 1.
+    min_weight : float
+        Skip leaf nodes below this weight.
 
     Returns
     -------
-    ids, labels, parents, values, symbols, id_to_symbol : lists and dict
+    ids, labels, values, parents : lists
     """
     ids: List[str] = []
     labels: List[str] = []
-    parents: List[str] = []
     values: List[float] = []
-    symbols: List[str] = []
-    id_to_symbol: Dict[str, str] = {}
+    parents: List[str] = []
 
+    # --- Root node ---
     root_id = "Sodium-Ion Battery"
     ids.append(root_id)
     labels.append("Sodium-Ion Battery")
+    values.append(0)  # root has no intrinsic value in sunburst
     parents.append("")
-    values.append(0)
-    symbols.append(SYMBOL_LIBRARY[0])
-    id_to_symbol[root_id] = SYMBOL_LIBRARY[0]
 
-    # Build category mapping for ALL nodes (not just ontology ones)
-    category_map = abstract_concepts_to_categories(list(graph.nodes()))
-
-    # Aggregate children per category
+    # --- Aggregate children per category ---
     category_children: Dict[str, List[Tuple[str, float]]] = defaultdict(list)
 
-    for node in graph.nodes():
-        category = category_map.get(node, 'general')
-
-        # Skip if filtered out
-        if category_filter and category not in category_filter:
+    for node in graph.nodes:
+        if node not in _HIERARCHY_PARENTS:
             continue
-
-        # Get weight
-        if node_weights and node in node_weights:
-            w = node_weights[node]
-        elif concept_abstract_map and node in concept_abstract_map:
-            w = float(len(concept_abstract_map[node]))
-        else:
-            w = 1.0
-
+        parent_label = _HIERARCHY_PARENTS[node][0]
+        if parent_label is None:
+            continue
+        w = (node_weights or {}).get(node, 1.0)
         if w < min_weight:
             continue
+        category_children[parent_label].append((node, w))
 
-        category_children[category].append((node, w))
-
-    # Build display names and check for collisions
-    all_cat_displays = set()
-    for cat in category_children.keys():
-        display = cat.replace('_', ' ').title()
-        all_cat_displays.add(display)
-
-    # Category nodes (depth 1)
-    cat_idx = 0
+    # --- Category (tier-1) nodes ---
     for cat_label, children in sorted(category_children.items()):
-        children.sort(key=lambda x: x[1], reverse=True)
-
-        if top_n_per_category > 0 and len(children) > top_n_per_category:
-            children = children[:top_n_per_category]
-
-        cat_display = cat_label.replace('_', ' ').title()
+        cat_id = cat_label  # unique enough
         cat_value = sum(w for _, w in children)
-
-        ids.append(cat_label)
-        labels.append(cat_display)
-        parents.append(root_id)
+        ids.append(cat_id)
+        labels.append(cat_label)
         values.append(cat_value)
+        parents.append(root_id)
 
-        cat_symbol = build_symbol_chain(cat_label, root_id, 1, cat_idx)
-        symbols.append(cat_symbol)
-        id_to_symbol[cat_label] = cat_symbol
+        # --- Leaf (tier-2) nodes ---
+        for child_key, child_w in sorted(children, key=lambda x: -x[1]):
+            child_label = child_key.replace("_", " ").title()
+            child_id = child_key  # unique
+            ids.append(child_id)
+            labels.append(child_label)
+            values.append(child_w)
+            parents.append(cat_id)
 
-        # Leaf nodes (depth 2)
-        for child_idx, (concept, freq) in enumerate(children):
-            concept_display = concept.replace('_', ' ').title()
+    return ids, labels, values, parents
 
-            # ★ ANTI-COLLISION: Skip if display name matches a category name
-            if concept_display in all_cat_displays:
+class AdvancedConceptResolver:
+    """
+    Multi-level concept resolution using ontology, embeddings, and context.
+    Faithful port of AgNPs pattern:
+    - EAGER single-batch precomputation of ontology embeddings
+    - Batch matrix resolution
+    """
+
+    def __init__(
+        self,
+        ontology: DomainOntology,
+        embed_model,
+        cache_max: int = 2000,
+    ) -> None:
+        self.ontology = ontology
+        self.embed_model = embed_model
+        self.resolution_cache: Dict[str, str] = {}
+        self.embedding_cache: Dict[str, np.ndarray] = {}
+        # v6.1 (Patch 3): both caches are now BOUNDED. On Streamlit Cloud
+        # an unbounded embedding_cache alone leaked ~200 MB by batch 2
+        # (one 384-d float vector per unique query phrase).
+        self._cache_max = max(100, int(cache_max))
+        self.similarity_threshold = 0.85
+        self.ontology_concepts_list: Optional[List[str]] = None
+        self.ontology_embedding_matrix: Optional[np.ndarray] = None
+        self._precompute_ontology_embeddings()
+
+    def _trim_embedding_cache(self) -> None:
+        """Evict the oldest 30% of entries once the cache overflows.
+
+        Python dicts preserve insertion order, so the first keys are the
+        oldest (LRU-ish eviction without an OrderedDict). Called after
+        every embedding-match lookup; cheap because it only does real
+        work past the cap.
+        """
+        if len(self.embedding_cache) > self._cache_max:
+            keys = list(self.embedding_cache.keys())
+            for k in keys[:int(len(keys) * 0.3)]:
+                del self.embedding_cache[k]
+            gc.collect()
+
+    def _trim_resolution_cache(self) -> None:
+        """Same bounded-cache discipline for the str→str resolution cache."""
+        if len(self.resolution_cache) > self._cache_max * 4:
+            keys = list(self.resolution_cache.keys())
+            for k in keys[:int(len(keys) * 0.3)]:
+                del self.resolution_cache[k]
+
+    def _precompute_ontology_embeddings(self) -> None:
+        concepts: List[str] = []
+        all_texts: List[str] = []
+        text_counts: List[int] = []
+
+        for canonical, node in self.ontology.concepts.items():
+            concepts.append(canonical)
+            texts = [canonical] + list(node.synonyms)
+            all_texts.extend(texts)
+            text_counts.append(len(texts))
+
+        if not all_texts:
+            self.ontology_concepts_list = []
+            self.ontology_embedding_matrix = np.empty((0, 0))
+            return
+
+        with torch.no_grad():
+            all_embeddings = self.embed_model.encode(
+                all_texts,
+                show_progress_bar=False,
+                batch_size=64,
+                convert_to_numpy=True,
+            )
+
+        embeddings: List[np.ndarray] = []
+        idx = 0
+        for count in text_counts:
+            concept_embs = all_embeddings[idx:idx + count]
+            embeddings.append(np.mean(concept_embs, axis=0))
+            idx += count
+
+        del all_embeddings
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        self.ontology_concepts_list = concepts
+        self.ontology_embedding_matrix = (
+            np.array(embeddings) if embeddings else np.empty((0, 0))
+        )
+
+    @timed
+    def resolve(
+        self, text: str, context: str = "", use_embedding: bool = True
+    ) -> Optional[str]:
+        self._trim_resolution_cache()  # v6.1: cheap no-op until cap hit
+        text_lower = text.lower().strip()
+        if text_lower in self.resolution_cache:
+            return self.resolution_cache[text_lower]
+
+        canonical = self.ontology.resolve_concept(text)
+        if canonical:
+            self.resolution_cache[text_lower] = canonical
+            return canonical
+
+        canonical = self._substring_match(text_lower)
+        if canonical:
+            self.resolution_cache[text_lower] = canonical
+            return canonical
+
+        if use_embedding and self.ontology_embedding_matrix.size > 0:
+            canonical = self._embedding_match(text, context)
+            if canonical:
+                self.resolution_cache[text_lower] = canonical
+                return canonical
+
+        if context:
+            canonical = self._context_disambiguation(text_lower, context)
+            if canonical:
+                self.resolution_cache[text_lower] = canonical
+                return canonical
+
+        return None
+
+    @timed
+    def resolve_batch(
+        self, phrases: List[str], context: str = ""
+    ) -> Dict[str, Optional[str]]:
+        results: Dict[str, Optional[str]] = {}
+        need_embedding: List[str] = []
+
+        for phrase in phrases:
+            phrase_lower = phrase.lower().strip()
+            if phrase_lower in self.resolution_cache:
+                results[phrase] = self.resolution_cache[phrase_lower]
                 continue
+            canonical = self.ontology.resolve_concept(phrase)
+            if canonical:
+                self.resolution_cache[phrase_lower] = canonical
+                results[phrase] = canonical
+                continue
+            sub_match = self._substring_match(phrase_lower)
+            if sub_match:
+                self.resolution_cache[phrase_lower] = sub_match
+                results[phrase] = sub_match
+                continue
+            need_embedding.append(phrase)
 
-            ids.append(concept)
-            labels.append(concept_display)
-            parents.append(cat_label)
-            values.append(max(freq, 1))
-
-            if use_symbols:
-                leaf_symbol = build_symbol_chain(
-                    concept, cat_label, 2, child_idx,
-                    parent_chain=[cat_symbol]
+        if need_embedding and self.ontology_embedding_matrix.size > 0:
+            query_texts = [
+                p if not context else f"{p} in context of {context}"
+                for p in need_embedding
+            ]
+            with torch.no_grad():
+                query_embs = self.embed_model.encode(
+                    query_texts,
+                    show_progress_bar=False,
+                    batch_size=64,
+                    convert_to_numpy=True,
                 )
-                symbols.append(leaf_symbol)
-                id_to_symbol[concept] = leaf_symbol
+            sims = cosine_similarity(query_embs, self.ontology_embedding_matrix)
+            best_indices = np.argmax(sims, axis=1)
+            best_scores = np.max(sims, axis=1)
+            for idx, phrase in enumerate(need_embedding):
+                if best_scores[idx] > self.similarity_threshold:
+                    canonical = self.ontology_concepts_list[best_indices[idx]]
+                    self.resolution_cache[phrase.lower().strip()] = canonical
+                    results[phrase] = canonical
+                else:
+                    results[phrase] = None
+            del query_embs, sims, best_indices, best_scores
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        else:
+            for phrase in need_embedding:
+                results[phrase] = None
+
+        self._trim_resolution_cache()  # v6.1: bounded cache (Patch 3)
+        return results
+
+    def _substring_match(self, text: str) -> Optional[str]:
+        for canonical, node in self.ontology.concepts.items():
+            all_forms = {canonical.lower()} | node.synonyms
+            for form in all_forms:
+                if form in text or text in form:
+                    if len(form) > 4 and len(text) > 4:
+                        return canonical
+        return None
+
+    def _embedding_match(self, text: str, context: str = "") -> Optional[str]:
+        try:
+            query_text = (
+                text if not context else f"{text} in context of {context}"
+            )
+            if query_text not in self.embedding_cache:
+                with torch.no_grad():
+                    self.embedding_cache[query_text] = self.embed_model.encode(
+                        query_text,
+                        show_progress_bar=False,
+                        convert_to_numpy=True,
+                    )
+            query_emb = self.embedding_cache[query_text]
+            sims = cosine_similarity(
+                [query_emb], self.ontology_embedding_matrix
+            )[0]
+            best_idx = int(np.argmax(sims))
+            if sims[best_idx] > self.similarity_threshold:
+                return self.ontology_concepts_list[best_idx]
+            return None
+        except Exception:
+            return None
+        finally:
+            # v6.1 (Patch 3): keep the cache bounded even on the error path
+            self._trim_embedding_cache()
+
+    def _context_disambiguation(
+        self, text: str, context: str
+    ) -> Optional[str]:
+        context_lower = context.lower()
+        electrochemical_indicators = [
+            'capacity', 'voltage', 'current', 'cycle', 'efficiency', 'density',
+            'conductivity', 'impedance'
+        ]
+        if any(ind in context_lower for ind in electrochemical_indicators):
+            if 'capacity' in text or 'density' in text:
+                return "specific_capacity" if 'capacity' in text else "energy_density"
+            if 'efficiency' in text:
+                return "coulombic_efficiency"
+        return None
+
+    def find_equivalent_concepts(
+        self, concepts: List[str]
+    ) -> Dict[str, str]:
+        equivalence_map: Dict[str, str] = {}
+        for concept in concepts:
+            canonical = self.resolve(concept)
+            if canonical:
+                equivalence_map[concept] = canonical
             else:
-                symbols.append("")
+                equivalence_map[concept] = concept
+        return equivalence_map
 
-        cat_idx += 1
-
-    return ids, labels, values, parents, symbols, id_to_symbol
+    def compute_semantic_similarity(
+        self, concept1: str, concept2: str
+    ) -> float:
+        c1 = self.resolve(concept1) or concept1
+        c2 = self.resolve(concept2) or concept2
+        if c1 == c2:
+            return 1.0
+        if (
+            c2 in self.ontology.get_hypernyms(c1)
+            or c1 in self.ontology.get_hypernyms(c2)
+        ):
+            return 0.9
+        if (
+            c2 in self.ontology.get_hyponyms(c1)
+            or c1 in self.ontology.get_hyponyms(c2)
+        ):
+            return 0.9
+        try:
+            with torch.no_grad():
+                emb1 = self.embed_model.encode(
+                    c1, show_progress_bar=False, convert_to_numpy=True
+                )
+                emb2 = self.embed_model.encode(
+                    c2, show_progress_bar=False, convert_to_numpy=True
+                )
+            return float(cosine_similarity([emb1], [emb2])[0][0])
+        except Exception:
+            return 0.0
 
 
 # ============================================================================
-# IMPROVED PYVIS RENDERER
+# ENHANCED CONCEPT EXTRACTOR (SIB-focused)
+# ============================================================================
+class EnhancedConceptExtractor:
+    def __init__(
+        self,
+        ontology: DomainOntology,
+        resolver: AdvancedConceptResolver,
+        store_contexts: bool = False,
+        store_documents: bool = True,
+    ) -> None:
+        self.ontology = ontology
+        self.resolver = resolver
+        self.concept_frequencies: Dict[str, int] = defaultdict(int)
+        # v6.1 (Patch 2): `concept_contexts` stored a 200-char snippet per
+        # concept per document (~100 MB by batch 2) and was never read by
+        # any downstream function — dead-code leak, now disabled by default.
+        self.store_contexts = store_contexts
+        # v6.1: `document_concepts` kept one concept list per doc id —
+        # the same unbounded pattern (leak #6). Batch mode disables it.
+        self.store_documents = store_documents
+        self.concept_contexts: Dict[str, List[str]] = defaultdict(list)
+        self.document_concepts: Dict[int, List[str]] = defaultdict(list)
+        self._build_extraction_patterns()
+        # Limit keyword regex to top 500 longest keywords to prevent regex engine crash
+        all_keywords = self._get_all_keywords()
+        if all_keywords:
+            sorted_keywords = sorted(all_keywords, key=len, reverse=True)[:500]
+            pattern = r'\b(' + '|'.join(
+                re.escape(k) for k in sorted_keywords
+            ) + r')\b'
+            self._keyword_regex = re.compile(pattern, re.IGNORECASE)
+        else:
+            self._keyword_regex = None
+
+    def _build_extraction_patterns(self) -> None:
+        # Sodium-ion battery specific patterns
+        self.cathode_patterns = [
+            r'\blayered\s+oxide\b', r'\bna_mno2\b', r'\bnamno2\b',
+            r'\bnvp\b', r'\bna3v2(po4)3\b', r'\bnvpf\b',
+            r'\bprussian\s+blue\s+analogue\b', r'\bpba\b',
+            r'\bnasicon\b'
+        ]
+        self.anode_patterns = [
+            r'\bhard\s+carbon\b', r'\bhard\s+carbon\s+anode\b',
+            r'\bsodium\s+metal\b', r'\bna\s+metal\b',
+            r'\balloying\s+anode\b', r'\bsn\s+anode\b', r'\bsb\s+anode\b'
+        ]
+        self.electrolyte_patterns = [
+            r'\bliquid\s+electrolyte\b', r'\bnaclo4\b', r'\bna\s*pf6\b',
+            r'\bsolid\s+electrolyte\b', r'\bnasicon\b', r'\bna3ps4\b',
+            r'\bpolymer\s+electrolyte\b', r'\bpeo\b',
+            r'\bquasi[- ]solid\s+electrolyte\b'
+        ]
+        self.property_patterns = [
+            r'\bspecific\s+capacity\b', r'\bmah/g\b',
+            r'\benergy\s+density\b', r'\bwh/kg\b',
+            r'\bcoulombic\s+efficiency\b', r'\bce\b',
+            r'\bcycle\s+life\b', r'\brate\s+capability\b',
+            r'\bionic\s+conductivity\b', r'\bvoltage\s+plateau\b'
+        ]
+        self.phenomena_patterns = [
+            r'\bdendrite\s+growth\b', r'\bsodium\s+dendrite\b',
+            r'\bsei\s+formation\b', r'\bsolid\s+electrolyte\s+interphase\b',
+            r'\bplating/stripping\b', r'\bsodium\s+plating\b',
+            r'\bintercalation\b', r'\bconversion\s+reaction\b'
+        ]
+        self.method_patterns = [
+            r'\bcyclic\s+voltammetry\b', r'\bcv\b',
+            r'\belectrochemical\s+impedance\s+spectroscopy\b', r'\beis\b',
+            r'\bgalvanostatic\s+cycling\b', r'\bcccv\b',
+            r'\boperando\b', r'\bin\s+ situ\s+ xrd\b'
+        ]
+        self.param_patterns = [
+            r'\bcurrent\s+density\b', r'\bma/g\b', r'\ba/g\b',
+            r'\bcut[ -]off\s+voltage\b', r'\bvoltage\s+window\b',
+            r'\btemperature\b', r'\bcelsius\b', r'\bkelvin\b'
+        ]
+        self.processing_patterns = [
+            r'\bslurry\s+coating\b', r'\bdoctor\s+blade\b',
+            r'\bcoin\s+cell\b', r'\bpouch\s+cell\b', r'\bcell\s+assembly\b'
+        ]
+        self.all_patterns = (
+            self.cathode_patterns + self.anode_patterns +
+            self.electrolyte_patterns + self.property_patterns +
+            self.phenomena_patterns + self.method_patterns +
+            self.param_patterns + self.processing_patterns
+        )
+        self.compiled_patterns = [
+            re.compile(p, re.IGNORECASE) for p in self.all_patterns
+        ]
+        self.compiled_param_patterns = []  # kept for compatibility
+        self.compiled_cause_patterns = [
+            re.compile(r'\b(increase|decrease|enhance|reduce)\w*\s+(?:in|of)\s+([\w\s-]+?)\s+(?:lead[s]?|result[s]?|cause[s]?)\s+(?:to|in)?\s+([\w\s-]+?)\b', re.I),
+        ]
+
+    @timed
+    def extract_from_text(self, text: str, doc_id: int = 0) -> List[str]:
+        concepts: Set[str] = set()
+        text_lower = text.lower()
+
+        # 1. Pattern matching (domain-specific)
+        for pattern in self.compiled_patterns:
+            matches = pattern.findall(text)
+            for match in matches:
+                if isinstance(match, tuple):
+                    match = (
+                        match[0] if match[0]
+                        else (match[1] if len(match) > 1 else match[0])
+                    )
+                concept = match.lower().strip()
+                if len(concept) > 3:
+                    canonical = self.resolver.resolve(concept, context=text[:200])
+                    if canonical:
+                        concepts.add(canonical)
+                    else:
+                        concepts.add(concept)
+
+        # 2. Localized Context Window Extraction (Prevents Memory issue)
+        context_concepts = self._extract_from_context_windows(text)
+        concepts.update(context_concepts)
+
+        # 3. Batch resolve remaining raw concepts (limit to 50 to prevent OOM)
+        raw_concepts = set()
+        for c in concepts:
+            if c not in self.ontology.concepts and not self.resolver.resolve(c):
+                raw_concepts.add(c)
+        if raw_concepts:
+            raw_list = list(raw_concepts)[:50]
+            resolved_map = self.resolver.resolve_batch(raw_list, context="")
+            for raw, canonical in resolved_map.items():
+                if canonical:
+                    concepts.add(canonical)
+                else:
+                    concepts.add(raw)
+
+        # Update tracking
+        for concept in concepts:
+            self.concept_frequencies[concept] += 1
+            if self.store_contexts:
+                # Opt-in only (v6.1): unbounded per-doc snippet storage
+                # was a dead-code memory leak and is off by default.
+                self.concept_contexts[concept].append(text[:200])
+        if self.store_documents:
+            self.document_concepts[doc_id] = list(concepts)
+        return list(concepts)
+
+    def _extract_from_context_windows(
+        self, text: str, window_size: int = 100
+    ) -> Set[str]:
+        """Optimized: Resolves locally using a 200-char window instead of full text."""
+        if not self._keyword_regex:
+            return set()
+        candidate_phrases: Set[str] = set()
+        text_lower = text.lower()
+        match_count = 0
+        for match in self._keyword_regex.finditer(text_lower):
+            if match_count > 20:  # Cap iterations per abstract
+                break
+            match_count += 1
+            start = max(0, match.start() - window_size)
+            end = min(len(text), match.end() + window_size)
+            local_context = text_lower[start:end]
+            phrases = re.findall(
+                r'\b([a-z]+(?:[-\s][a-z]+){1,3})\b', local_context
+            )
+            for phrase in phrases:
+                if 5 <= len(phrase) <= 40:
+                    # Resolve using the small local window
+                    canonical = self.resolver.resolve(phrase, context=local_context)
+                    if canonical:
+                        candidate_phrases.add(canonical)
+        return candidate_phrases
+
+    def _get_all_keywords(self) -> Set[str]:
+        keywords: Set[str] = set()
+        for canonical, node in self.ontology.concepts.items():
+            keywords.add(canonical)
+            keywords.update(node.synonyms)
+        return keywords
+
+    def extract_relationships(self, text: str) -> List[Relationship]:
+        relationships: List[Relationship] = []
+        for pattern in self.compiled_cause_patterns:
+            matches = pattern.findall(text)
+            for match in matches:
+                if len(match) >= 2:
+                    source = (
+                        match[0] if isinstance(match[0], str) else match[1]
+                    )
+                    target = (
+                        match[-1] if isinstance(match[-1], str) else match[0]
+                    )
+                    # Truncate context
+                    source_canon = self.resolver.resolve(source, context=text[:200])
+                    target_canon = self.resolver.resolve(target, context=text[:200])
+                    if (
+                        source_canon and target_canon
+                        and source_canon != target_canon
+                    ):
+                        rel = Relationship(
+                            source=source_canon,
+                            target=target_canon,
+                            rel_type=RelationshipType.CAUSES,
+                            confidence=0.7,
+                            evidence=text[:150],
+                        )
+                        relationships.append(rel)
+        return relationships
+
+    def get_concept_frequencies(self) -> Dict[str, int]:
+        return dict(self.concept_frequencies)
+
+    def get_concept_contexts(self, concept: str) -> List[str]:
+        return self.concept_contexts.get(concept, [])
+
+    def get_document_concepts(self, doc_id: int) -> List[str]:
+        return self.document_concepts.get(doc_id, [])
+
+
+# ============================================================================
+# REASONING-ENHANCED GRAPH BUILDER
+# ============================================================================
+class ReasoningEnhancedGraphBuilder:
+    def __init__(
+        self, ontology: DomainOntology, extractor: EnhancedConceptExtractor
+    ) -> None:
+        self.ontology = ontology
+        self.extractor = extractor
+        self.reasoning_paths: List[List[str]] = []
+        self.inferred_edges: Set[Tuple[str, str]] = set()
+
+    @timed
+    def build_graph(
+        self,
+        all_concepts: List[List[str]],
+        valid_concepts: List[str],
+        concept_to_id: Dict[str, int],
+        embed_model=None,
+        config: Dict = None,
+    ) -> nx.Graph:
+        if config is None:
+            config = get_adaptive_config(3000)
+        nx_graph = nx.Graph()
+
+        for c in valid_concepts:
+            concept_type = self.ontology.get_concept_type(c)
+            freq = self.extractor.concept_frequencies.get(c, 0)
+            definition = self.ontology.get_definition(c)
+            nx_graph.add_node(
+                c,
+                frequency=freq,
+                concept_type=concept_type.value,
+                definition=definition,
+                degree=0,
+            )
+
+        cooccurrence_map: Dict[Tuple[str, str], int] = defaultdict(int)
+        for concepts in all_concepts:
+            valid_in_doc = [c for c in concepts if c in concept_to_id]
+            for i in range(len(valid_in_doc)):
+                for j in range(i + 1, len(valid_in_doc)):
+                    u, v = valid_in_doc[i], valid_in_doc[j]
+                    if u != v:
+                        key = tuple(sorted([u, v]))
+                        cooccurrence_map[key] += 1
+
+        for (u, v), count in cooccurrence_map.items():
+            nx_graph.add_edge(
+                u, v,
+                weight=count,
+                cooccurrence=count,
+                semantic=0,
+                edge_type='cooccurrence',
+                inferred=False,
+            )
+
+        if embed_model and len(valid_concepts) >= 10:
+            self._add_semantic_edges(nx_graph, valid_concepts, embed_model, config)
+
+        if st.session_state.get('use_inference', True):
+            self._add_inferred_edges(nx_graph, valid_concepts)
+            self._add_cause_effect_edges(nx_graph)
+            self._add_hierarchical_edges(nx_graph, valid_concepts)
+
+        self._compute_final_weights(nx_graph, config)
+        return nx_graph
+
+    def _add_semantic_edges(
+        self, nx_graph: nx.Graph, valid_concepts: List[str],
+        embed_model, config: Dict,
+    ) -> None:
+        try:
+            with torch.no_grad():
+                embeddings = embed_model.encode(
+                    valid_concepts,
+                    show_progress_bar=False,
+                    batch_size=64,
+                    convert_to_numpy=True,
+                )
+            sim_matrix = cosine_similarity(embeddings)
+            sim_thresh = config.get("SIMILARITY_THRESHOLD", 0.85)
+            for i, c1 in enumerate(valid_concepts):
+                for j, c2 in enumerate(valid_concepts[i + 1:], start=i + 1):
+                    if c1 == c2 or nx_graph.has_edge(c1, c2):
+                        continue
+                    sim = sim_matrix[i][j]
+                    if sim > sim_thresh:
+                        if nx_graph.degree(c1) < 3 or nx_graph.degree(c2) < 3:
+                            nx_graph.add_edge(
+                                c1, c2,
+                                weight=sim * 2,
+                                cooccurrence=0,
+                                semantic=sim,
+                                edge_type='semantic',
+                                inferred=False,
+                            )
+            del embeddings, sim_matrix
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception as e:
+            st.warning(f"Semantic edge addition skipped: {e}")
+
+    def _add_inferred_edges(
+        self, nx_graph: nx.Graph, valid_concepts: List[str]
+    ) -> None:
+        for rel in self.ontology.relationships:
+            if rel.source in valid_concepts and rel.target in valid_concepts:
+                if not nx_graph.has_edge(rel.source, rel.target):
+                    nx_graph.add_edge(
+                        rel.source, rel.target,
+                        weight=rel.confidence * 2,
+                        cooccurrence=0,
+                        semantic=rel.confidence,
+                        edge_type=rel.rel_type.value,
+                        inferred=True,
+                        confidence=rel.confidence,
+                    )
+                    self.inferred_edges.add((rel.source, rel.target))
+        self._infer_cross_domain_bridges(nx_graph, valid_concepts)
+
+    def _infer_cross_domain_bridges(
+        self, nx_graph: nx.Graph, valid_concepts: List[str]
+    ) -> None:
+        material_nodes = [
+            c for c in valid_concepts
+            if self.ontology.get_concept_type(c) == ConceptType.MATERIAL
+        ]
+        property_nodes = [
+            c for c in valid_concepts
+            if self.ontology.get_concept_type(c) == ConceptType.PROPERTY
+        ]
+        for mat in material_nodes:
+            for prop in property_nodes:
+                if not nx_graph.has_edge(mat, prop):
+                    paths = self.ontology.infer_path(mat, prop, max_depth=2)
+                    if paths:
+                        avg_confidence = 0.6
+                        nx_graph.add_edge(
+                            mat, prop,
+                            weight=avg_confidence,
+                            cooccurrence=0,
+                            semantic=avg_confidence,
+                            edge_type='bridge',
+                            inferred=True,
+                            path=" -> ".join(paths[0]),
+                        )
+                        self.inferred_edges.add((mat, prop))
+                        self.reasoning_paths.append(paths[0])
+
+    def _add_cause_effect_edges(self, nx_graph: nx.Graph) -> None:
+        pass
+
+    def _add_hierarchical_edges(
+        self, nx_graph: nx.Graph, valid_concepts: List[str]
+    ) -> None:
+        for concept in valid_concepts:
+            if concept not in self.ontology.concepts:
+                continue
+            node = self.ontology.concepts[concept]
+            for hypernym in node.hypernyms:
+                if (
+                    hypernym in valid_concepts
+                    and not nx_graph.has_edge(concept, hypernym)
+                ):
+                    nx_graph.add_edge(
+                        concept, hypernym,
+                        weight=1.0, cooccurrence=0, semantic=0.95,
+                        edge_type='hypernym', inferred=True,
+                    )
+            for hyponym in node.hyponyms:
+                if (
+                    hyponym in valid_concepts
+                    and not nx_graph.has_edge(concept, hyponym)
+                ):
+                    nx_graph.add_edge(
+                        concept, hyponym,
+                        weight=1.0, cooccurrence=0, semantic=0.95,
+                        edge_type='hyponym', inferred=True,
+                    )
+
+    def _compute_final_weights(
+        self, nx_graph: nx.Graph, config: Dict
+    ) -> None:
+        cooc_weight = config.get("COOCCURRENCE_WEIGHT", 0.7)
+        sem_weight = config.get("SEMANTIC_WEIGHT", 0.2)
+        inf_weight = config.get("INFERENCE_WEIGHT", 0.1)
+        for u, v, data in nx_graph.edges(data=True):
+            cooc = data.get('cooccurrence', 0)
+            sem = data.get('semantic', 0)
+            inf = 1.0 if data.get('inferred', False) else 0
+            conf = data.get('confidence', 0.5)
+            data['weight'] = (
+                cooc_weight * cooc
+                + sem_weight * sem
+                + inf_weight * inf * conf
+            )
+
+
+# ============================================================================
+# UTILITY FUNCTIONS
+# ============================================================================
+def compute_text_hash(text: str) -> str:
+    return hashlib.md5(text.encode('utf-8')).hexdigest()
+
+
+def get_adaptive_config(num_abstracts: int) -> Dict[str, Any]:
+    if num_abstracts <= 50:
+        return {
+            "MIN_CONCEPT_FREQ": 2, "MIN_CONCEPT_LENGTH_WORDS": 2,
+            "MIN_DEGREE": 1, "USE_SEMANTIC_CLUSTERING": True,
+            "SIMILARITY_THRESHOLD": 0.72, "COOCCURRENCE_WEIGHT": 0.5,
+            "SEMANTIC_WEIGHT": 0.5, "CLUSTER_SIMILARITY": 0.75,
+            "TOP_N_CONCEPTS": 200, "MAX_CONCEPT_LENGTH": 6,
+            "INFERENCE_WEIGHT": 0.1,
+        }
+    elif num_abstracts <= 500:
+        return {
+            "MIN_CONCEPT_FREQ": 3, "MIN_CONCEPT_LENGTH_WORDS": 2,
+            "MIN_DEGREE": 2, "USE_SEMANTIC_CLUSTERING": True,
+            "SIMILARITY_THRESHOLD": 0.78, "COOCCURRENCE_WEIGHT": 0.6,
+            "SEMANTIC_WEIGHT": 0.3, "CLUSTER_SIMILARITY": 0.72,
+            "TOP_N_CONCEPTS": 500, "MAX_CONCEPT_LENGTH": 8,
+            "INFERENCE_WEIGHT": 0.1,
+        }
+    else:
+        return {
+            "MIN_CONCEPT_FREQ": 5, "MIN_CONCEPT_LENGTH_WORDS": 2,
+            "MIN_DEGREE": 3, "USE_SEMANTIC_CLUSTERING": False,
+            "SIMILARITY_THRESHOLD": 0.85, "COOCCURRENCE_WEIGHT": 0.7,
+            "SEMANTIC_WEIGHT": 0.2, "CLUSTER_SIMILARITY": 0.68,
+            "TOP_N_CONCEPTS": 1000, "MAX_CONCEPT_LENGTH": 10,
+            "INFERENCE_WEIGHT": 0.1,
+        }
+
+
+@st.cache_resource(show_spinner=False)
+def load_embedding_model():
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    try:
+        return SentenceTransformer(
+            "sentence-transformers/all-MiniLM-L6-v2", device=device
+        )
+    except Exception as e:
+        st.error(f"Embedding model error: {e}")
+        return SentenceTransformer(
+            "sentence-transformers/all-MiniLM-L6-v2", device="cpu"
+        )
+
+
+# ============================================================================
+# SODIUM-ION BATTERY KEYWORDS
+# ============================================================================
+CATHODE_KEYWORDS = [
+    "layered oxide", "na_mno2", "namno2", "p2 na_mno2", "o3 na_mno2",
+    "polyanionic", "na3v2(po4)3", "nvp", "nvpf", "prussian blue", "pba",
+    "nasicon", "na3zr2si2po12"
+]
+ANODE_KEYWORDS = [
+    "hard carbon", "hard carbon anode", "sodium metal", "na metal",
+    "alloying anode", "sn anode", "sb anode", "intercalation anode", "tio2"
+]
+ELECTROLYTE_KEYWORDS = [
+    "liquid electrolyte", "naclo4", "na pf6", "solid electrolyte",
+    "na3ps4", "polymer electrolyte", "peo", "quasi-solid electrolyte"
+]
+PROPERTY_KEYWORDS = [
+    "specific capacity", "mah/g", "energy density", "wh/kg",
+    "coulombic efficiency", "ce", "cycle life", "rate capability",
+    "ionic conductivity", "voltage plateau"
+]
+PHENOMENA_KEYWORDS = [
+    "dendrite growth", "sodium dendrite", "sei formation",
+    "solid electrolyte interphase", "plating/stripping",
+    "sodium plating", "intercalation", "conversion reaction"
+]
+METHOD_KEYWORDS = [
+    "cyclic voltammetry", "cv", "electrochemical impedance spectroscopy",
+    "eis", "galvanostatic cycling", "cccv", "operando", "in situ xrd"
+]
+PARAM_KEYWORDS = [
+    "current density", "ma/g", "a/g", "cut-off voltage",
+    "voltage window", "temperature"
+]
+PROCESSING_KEYWORDS = [
+    "slurry coating", "doctor blade", "coin cell", "pouch cell",
+    "cell assembly"
+]
+ALL_DOMAIN_KEYWORDS = (
+    CATHODE_KEYWORDS + ANODE_KEYWORDS + ELECTROLYTE_KEYWORDS +
+    PROPERTY_KEYWORDS + PHENOMENA_KEYWORDS + METHOD_KEYWORDS +
+    PARAM_KEYWORDS + PROCESSING_KEYWORDS
+)
+SIB_PATTERNS = [
+    r'\blayered\s+oxide\b', r'\bna_mno2\b', r'\bnamno2\b',
+    r'\bnvp\b', r'\bna3v2(po4)3\b', r'\bnvpf\b',
+    r'\bprussian\s+blue\s+analogue\b', r'\bpba\b',
+    r'\bnasicon\b',
+    r'\bhard\s+carbon\b', r'\bsodium\s+metal\b',
+    r'\balloying\s+anode\b', r'\bsn\s+anode\b', r'\bsb\s+anode\b',
+    r'\bliquid\s+electrolyte\b', r'\bnaclo4\b', r'\bna\s*pf6\b',
+    r'\bsolid\s+electrolyte\b', r'\bna3ps4\b',
+    r'\bpolymer\s+electrolyte\b', r'\bpeo\b',
+    r'\bquasi[- ]solid\s+electrolyte\b',
+    r'\bspecific\s+capacity\b', r'\bmah/g\b',
+    r'\benergy\s+density\b', r'\bwh/kg\b',
+    r'\bcoulombic\s+efficiency\b', r'\bce\b',
+    r'\bcycle\s+life\b', r'\brate\s+capability\b',
+    r'\bionic\s+conductivity\b', r'\bvoltage\s+plateau\b',
+    r'\bdendrite\s+growth\b', r'\bsodium\s+dendrite\b',
+    r'\bsei\s+formation\b', r'\bsolid\s+electrolyte\s+interphase\b',
+    r'\bplating/stripping\b', r'\bsodium\s+plating\b',
+    r'\bintercalation\b', r'\bconversion\s+reaction\b',
+    r'\bcyclic\s+voltammetry\b', r'\bcv\b',
+    r'\belectrochemical\s+impedance\s+spectroscopy\b', r'\beis\b',
+    r'\bgalvanostatic\s+cycling\b', r'\bcccv\b',
+    r'\boperando\b', r'\bin\s+ situ\s+ xrd\b',
+    r'\bcurrent\s+density\b', r'\bma/g\b', r'\ba/g\b',
+    r'\bcut[ -]off\s+voltage\b', r'\bvoltage\s+window\b',
+    r'\btemperature\b',
+    r'\bslurry\s+coating\b', r'\bdoctor\s+blade\b',
+    r'\bcoin\s+cell\b', r'\bpouch\s+cell\b', r'\bcell\s+assembly\b'
+]
+SIB_DESCRIPTOR_MAPPING = {
+    r'layered oxide|na_mno2|namno2|polyanionic|na3v2(po4)3|nvp|nvpf|prussian blue|pba|nasicon': 'cathode_material',
+    r'hard carbon|sodium metal|alloying anode|sn anode|sb anode|intercalation anode|tio2': 'anode_material',
+    r'liquid electrolyte|naclo4|na pf6|solid electrolyte|na3ps4|polymer electrolyte|peo|quasi-solid': 'electrolyte',
+    r'specific capacity|mah/g|energy density|wh/kg|coulombic efficiency|ce|cycle life|rate capability|ionic conductivity|voltage plateau': 'electrochemical_property',
+    r'dendrite growth|sodium dendrite|sei formation|solid electrolyte interphase|plating/stripping|sodium plating|intercalation|conversion reaction': 'phenomenon',
+    r'cyclic voltammetry|cv|electrochemical impedance spectroscopy|eis|galvanostatic cycling|cccv|operando|in situ xrd': 'method',
+    r'current density|ma/g|a/g|cut-off voltage|voltage window|temperature': 'parameter',
+    r'slurry coating|doctor blade|coin cell|pouch cell|cell assembly': 'processing'
+}
+
+
+def is_valid_sib_concept(concept: str) -> bool:
+    concept_lower = concept.lower()
+    has_domain = any(kw.lower() in concept_lower for kw in ALL_DOMAIN_KEYWORDS)
+    has_pattern = any(re.search(p, concept, re.I) for p in SIB_PATTERNS)
+    generic = {
+        'study', 'analysis', 'effect', 'role', 'investigation', 'research',
+        'method', 'approach', 'paper', 'work', 'using', 'based', 'novel',
+        'new', 'recent', 'various', 'different', 'significant', 'important',
+        'report', 'demonstrate', 'show', 'result', 'data', 'find', 'present',
+        'propose', 'develop', 'investigate', 'discuss', 'conclude', 'battery',
+        'cell', 'electrode', 'material', 'system', 'sample', 'specimen'
+    }
+    has_generic = any(term in concept_lower.split() for term in generic)
+    words = concept.split()
+    if len(words) < 2 or len(words) > 10:
+        return False
+    return (has_domain or has_pattern) and not has_generic
+
+
+def normalize_sib_concept(concept: str) -> str:
+    concept = concept.lower().strip()
+    # Replace synonyms with canonical forms
+    concept = re.sub(r'\bna_mno2\b|\bnamno2\b', 'layered_oxide_cathode', concept)
+    concept = re.sub(r'\bna3v2(po4)3\b|\bnvp\b|\bnvpf\b', 'polyanionic_cathode', concept)
+    concept = re.sub(r'\bprussian\s+blue\s+analogue\b|\bpba\b', 'prussian_blue_analogue', concept)
+    concept = re.sub(r'\bnasicon\b', 'nasicon_cathode', concept)
+    concept = re.sub(r'\bhard\s+carbon\b', 'hard_carbon', concept)
+    concept = re.sub(r'\bsodium\s+metal\b', 'sodium_metal', concept)
+    concept = re.sub(r'\balloying\s+anode\b|\bsn\s+anode\b|\bsb\s+anode\b', 'alloying_anode', concept)
+    concept = re.sub(r'\bliquid\s+electrolyte\b', 'liquid_electrolyte', concept)
+    concept = re.sub(r'\bsolid\s+electrolyte\b', 'solid_electrolyte', concept)
+    concept = re.sub(r'\bpolymer\s+electrolyte\b|\bpeo\b', 'polymer_electrolyte', concept)
+    concept = re.sub(r'\bquasi[- ]solid\s+electrolyte\b', 'quasi_solid_electrolyte', concept)
+    concept = re.sub(r'\bspecific\s+capacity\b', 'specific_capacity', concept)
+    concept = re.sub(r'\benergy\s+density\b', 'energy_density', concept)
+    concept = re.sub(r'\bcoulombic\s+efficiency\b|\bce\b', 'coulombic_efficiency', concept)
+    concept = re.sub(r'\bcycle\s+life\b', 'cycle_life', concept)
+    concept = re.sub(r'\brate\s+capability\b', 'rate_capability', concept)
+    concept = re.sub(r'\bionic\s+conductivity\b', 'ionic_conductivity', concept)
+    concept = re.sub(r'\bvoltage\s+plateau\b', 'voltage_plateau', concept)
+    concept = re.sub(r'\bdendrite\s+growth\b', 'dendrite_growth', concept)
+    concept = re.sub(r'\bsei\s+formation\b|\bsolid\s+electrolyte\s+interphase\b', 'sei_formation', concept)
+    concept = re.sub(r'\bsodium\s+plating\b|\bplating/stripping\b', 'sodium_plating_stripping', concept)
+    concept = re.sub(r'\bintercalation\b', 'intercalation', concept)
+    concept = re.sub(r'\bconversion\s+reaction\b', 'conversion_reaction', concept)
+    concept = re.sub(r'\bcyclic\s+voltammetry\b|\bcv\b', 'cyclic_voltammetry', concept)
+    concept = re.sub(r'\belectrochemical\s+impedance\s+spectroscopy\b|\beis\b', 'electrochemical_impedance_spectroscopy', concept)
+    concept = re.sub(r'\bgalvanostatic\s+cycling\b|\bcccv\b', 'galvanostatic_cycling', concept)
+    concept = re.sub(r'\boperando\b|\bin\s+situ\s+xrd\b', 'operando_characterization', concept)
+    concept = re.sub(r'\bcurrent\s+density\b', 'current_density', concept)
+    concept = re.sub(r'\bcut[ -]off\s+voltage\b|\bvoltage\s+window\b', 'cut_off_voltage', concept)
+    concept = re.sub(r'\btemperature\b', 'temperature', concept)
+    concept = re.sub(r'\bslurry\s+coating\b', 'slurry_coating', concept)
+    concept = re.sub(r'\bcoin\s+cell\b|\bpouch\s+cell\b|\bcell\s+assembly\b', 'cell_assembly', concept)
+    return concept
+
+
+def extract_concepts_from_text(text: str) -> List[str]:
+    concepts: Set[str] = set()
+    text_lower = text.lower()
+    for pattern in SIB_PATTERNS:
+        matches = re.findall(pattern, text, re.I)
+        for m in matches:
+            concept = m.lower().strip().rstrip('.').rstrip(',')
+            if len(concept.split()) >= 1 and len(concept) > 3:
+                concepts.add(concept)
+    noun_pattern = (
+        r'\b(?:[a-z]+(?:[-\s]?[a-z]+){0,2}[-\s]?)?'
+        r'(?:capacity|density|efficiency|conductivity|voltage|plateau|dendrite|sei|intercalation|conversion|cycling|impedance|coating|cell)\b'
+    )
+    matches = re.findall(noun_pattern, text, re.I)
+    for m in matches:
+        concept = m.lower().strip()
+        if is_valid_sib_concept(concept):
+            concepts.add(concept)
+    for keyword in ALL_DOMAIN_KEYWORDS:
+        for match in re.finditer(r'\b' + re.escape(keyword) + r'\b', text_lower):
+            start = max(0, match.start() - 100)
+            end = min(len(text), match.end() + 100)
+            context = text_lower[start:end]
+            context_phrases = re.findall(
+                r'\b([a-z]+(?:\s+[a-z]+){1,3})\s+'
+                r'(?:of|for|in|with|using|via|through|by|to|and|or)\s+'
+                + re.escape(keyword) + r'\b',
+                context,
+            )
+            for phrase in context_phrases:
+                concept = f"{phrase.strip()} {keyword}"
+                if is_valid_sib_concept(concept):
+                    concepts.add(concept)
+    return list(concepts)
+
+
+def extract_concepts_from_abstracts(
+    df: pd.DataFrame, text_columns: List[str]
+) -> Tuple[List[List[str]], List[Dict]]:
+    all_concepts: List[List[str]] = []
+    all_metrics: List[Dict] = []
+    for idx, row in df.iterrows():
+        combined_text = ""
+        for col in text_columns:
+            if col in row and pd.notna(row[col]):
+                combined_text += " " + str(row[col])
+        metrics: Dict[str, Any] = {}
+        # Extract numeric metrics typical for battery literature
+        current_matches = re.findall(r'(\d+(?:\.\d+)?)\s*(?:ma/g|a/g|ma\s*g-1)', combined_text, re.I)
+        if current_matches:
+            metrics['current_density_ma_g'] = [float(m) for m in current_matches]
+        cap_matches = re.findall(r'(\d+(?:\.\d+)?)\s*(?:mah/g|mah\s*g-1)', combined_text, re.I)
+        if cap_matches:
+            metrics['capacity_mah_g'] = [float(m) for m in cap_matches]
+        density_matches = re.findall(r'(\d+(?:\.\d+)?)\s*(?:wh/kg|wh\s*kg-1)', combined_text, re.I)
+        if density_matches:
+            metrics['energy_density_wh_kg'] = [float(m) for m in density_matches]
+        voltage_matches = re.findall(r'(\d+(?:\.\d+)?)\s*(?:v)', combined_text, re.I)
+        if voltage_matches:
+            metrics['voltage_v'] = [float(m) for m in voltage_matches]
+        temp_matches = re.findall(r'(\d+(?:\.\d+)?)\s*(?:°c|celsius|k)', combined_text, re.I)
+        if temp_matches:
+            metrics['temperature'] = [float(m) for m in temp_matches]
+        all_metrics.append(metrics)
+        concepts = extract_concepts_from_text(combined_text)
+        normalized = [normalize_sib_concept(c) for c in concepts]
+        all_concepts.append(normalized)
+    return all_concepts, all_metrics
+
+
+def cluster_similar_concepts(
+    valid_concepts: List[str], embed_model, similarity_threshold: float = 0.75
+) -> Tuple[List[str], Dict[str, str]]:
+    if len(valid_concepts) < 5:
+        return valid_concepts, {c: c for c in valid_concepts}
+    try:
+        with torch.no_grad():
+            embeddings = embed_model.encode(
+                valid_concepts,
+                show_progress_bar=False,
+                batch_size=64,
+                convert_to_numpy=True,
+            )
+        clustering = AgglomerativeClustering(
+            n_clusters=None,
+            distance_threshold=1 - similarity_threshold,
+            linkage='average',
+            metric='cosine',
+        ).fit(embeddings)
+        cluster_members: Dict[int, List[str]] = defaultdict(list)
+        concept_to_cluster: Dict[str, int] = {}
+        for idx, label in enumerate(clustering.labels_):
+            concept = valid_concepts[idx]
+            cluster_members[label].append(concept)
+            concept_to_cluster[concept] = label
+        cluster_representatives: Dict[int, str] = {}
+        for label, members in cluster_members.items():
+            def score(m):
+                domain_hits = sum(
+                    1 for kw in ALL_DOMAIN_KEYWORDS if kw.lower() in m.lower()
+                )
+                return (domain_hits, -len(m))
+            representative = max(members, key=score)
+            cluster_representatives[label] = representative
+        final_mapping = {
+            c: cluster_representatives[label]
+            for c, label in concept_to_cluster.items()
+        }
+        del embeddings
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        return list(cluster_representatives.values()), final_mapping
+    except Exception as e:
+        st.warning(f"Semantic clustering skipped: {e}")
+        return valid_concepts, {c: c for c in valid_concepts}
+
+
+def normalize_and_filter_concepts(
+    all_concepts: List[List[str]], config: Dict
+) -> Tuple[List[str], Dict[str, int], Dict[int, str], Dict[str, List[int]]]:
+    concept_counts: Dict[str, int] = defaultdict(int)
+    concept_abstract_map: Dict[str, List[int]] = defaultdict(list)
+    for doc_idx, concepts in enumerate(all_concepts):
+        seen_in_doc: Set[str] = set()
+        for c in concepts:
+            if c not in seen_in_doc and is_valid_sib_concept(c):
+                concept_counts[c] += 1
+                concept_abstract_map[c].append(doc_idx)
+                seen_in_doc.add(c)
+    min_freq = config.get("MIN_CONCEPT_FREQ", 5)
+    min_words = config.get("MIN_CONCEPT_LENGTH_WORDS", 2)
+    max_words = config.get("MAX_CONCEPT_LENGTH", 10)
+    valid_concepts = [
+        c for c, cnt in concept_counts.items()
+        if cnt >= min_freq and min_words <= len(c.split()) <= max_words
+    ]
+    if config.get("USE_SEMANTIC_CLUSTERING", False) and len(valid_concepts) > 50:
+        try:
+            embed_model = load_embedding_model()
+            valid_concepts, concept_to_cluster = cluster_similar_concepts(
+                valid_concepts, embed_model,
+                similarity_threshold=config.get("CLUSTER_SIMILARITY", 0.72),
+            )
+            new_abstract_map: Dict[str, List[int]] = defaultdict(list)
+            for orig_concept, docs in concept_abstract_map.items():
+                clustered = concept_to_cluster.get(orig_concept, orig_concept)
+                if clustered in valid_concepts:
+                    new_abstract_map[clustered].extend(docs)
+            concept_abstract_map = new_abstract_map
+        except Exception as e:
+            st.warning(f"Semantic clustering skipped: {e}")
+    valid_concepts = sorted(
+        valid_concepts, key=lambda c: concept_counts[c], reverse=True
+    )
+    top_n = config.get("TOP_N_CONCEPTS", 1000)
+    if len(valid_concepts) > top_n:
+        valid_concepts = valid_concepts[:top_n]
+    concept_to_id = {c: i for i, c in enumerate(valid_concepts)}
+    id_to_concept = {i: c for i, c in enumerate(valid_concepts)}
+    return valid_concepts, concept_to_id, id_to_concept, concept_abstract_map
+
+
+def abstract_concepts_to_categories(concepts: List[str]) -> Dict[str, str]:
+    concept_to_abstract: Dict[str, str] = {}
+    for concept in concepts:
+        matched = False
+        for pattern, category in SIB_DESCRIPTOR_MAPPING.items():
+            if re.search(pattern, concept, re.I):
+                concept_to_abstract[concept] = category
+                matched = True
+                break
+        if not matched:
+            if any(re.search(p, concept, re.I) for p in [r'cathode', r'oxide', r'phosphate', r'prussian']):
+                concept_to_abstract[concept] = 'cathode_material'
+            elif any(re.search(p, concept, re.I) for p in [r'anode', r'carbon', r'metal', r'alloying']):
+                concept_to_abstract[concept] = 'anode_material'
+            elif any(re.search(p, concept, re.I) for p in [r'electrolyte', r'nasicon', r'polymer']):
+                concept_to_abstract[concept] = 'electrolyte'
+            elif any(re.search(p, concept, re.I) for p in [r'capacity', r'density', r'efficiency', r'conductivity', r'voltage']):
+                concept_to_abstract[concept] = 'electrochemical_property'
+            elif any(re.search(p, concept, re.I) for p in [r'dendrite', r'sei', r'intercalation', r'conversion']):
+                concept_to_abstract[concept] = 'phenomenon'
+            elif any(re.search(p, concept, re.I) for p in [r'cv', r'eis', r'galvanostatic', r'operando']):
+                concept_to_abstract[concept] = 'method'
+            elif any(re.search(p, concept, re.I) for p in [r'current', r'voltage', r'temperature']):
+                concept_to_abstract[concept] = 'parameter'
+            elif any(re.search(p, concept, re.I) for p in [r'coating', r'cell', r'assembly']):
+                concept_to_abstract[concept] = 'processing'
+            else:
+                concept_to_abstract[concept] = 'general'
+    return concept_to_abstract
+
+
+# ============================================================================
+# CONCEPT DISTILLATION (Memory-safe)
+# ============================================================================
+def compute_concept_distillation(
+    valid_concepts: List[str],
+    concept_abstract_map: Dict[str, List[int]],
+    all_texts: Union[List[str], Dict[int, str]],
+    max_docs_per_concept: int = 30,
+) -> pd.DataFrame:
+    """Memory-safe concept distillation (v6.1 rewrite — Patch 4)."""
+    distill_data: List[Dict[str, Any]] = []
+    doc_corpus: List[str] = []
+
+    texts_is_dict = isinstance(all_texts, dict)
+    n_texts = len(all_texts)
+
+    for c in valid_concepts:
+        doc_indices = concept_abstract_map.get(c, [])
+        if max_docs_per_concept and len(doc_indices) > max_docs_per_concept:
+            doc_indices = doc_indices[:max_docs_per_concept]
+        if texts_is_dict:
+            doc_text = " ".join([
+                all_texts[i] for i in doc_indices
+                if i in all_texts
+            ])
+        else:
+            doc_text = " ".join([
+                all_texts[i] for i in doc_indices
+                if isinstance(i, int) and 0 <= i < n_texts
+            ])
+        doc_corpus.append(doc_text)
+
+    tfidf = TfidfVectorizer(
+        analyzer='word', ngram_range=(1, 2),
+        stop_words='english', max_features=2000,
+    )
+    try:
+        if any(doc_corpus) and any(t.strip() for t in doc_corpus):
+            tfidf_matrix = tfidf.fit_transform(doc_corpus)
+            tfidf_scores = tfidf_matrix.max(axis=1).A1
+            del tfidf_matrix
+        else:
+            tfidf_scores = np.ones(len(valid_concepts))
+    except Exception:
+        tfidf_scores = np.ones(len(valid_concepts))
+    gc.collect()
+
+    embed_model = load_embedding_model()
+
+    for i, c in enumerate(valid_concepts):
+        freq = len(concept_abstract_map.get(c, []))
+        semantic_density = float(tfidf_scores[i])
+        coherence = 0.0
+        if freq > 1 and doc_corpus[i].strip():
+            try:
+                words = doc_corpus[i].split()[:20]
+                with torch.no_grad():
+                    concept_embeddings = embed_model.encode(
+                        words, show_progress_bar=False,
+                        batch_size=16, convert_to_numpy=True,
+                    )
+                if len(concept_embeddings) > 1:
+                    sim_matrix = cosine_similarity(concept_embeddings)
+                    coherence = float(np.mean(
+                        sim_matrix[np.triu_indices_from(sim_matrix, k=1)]
+                    ))
+                    del sim_matrix
+                del concept_embeddings, words
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                coherence = 0.0
+        distill_data.append({
+            "concept": c,
+            "frequency": freq,
+            "tfidf_weight": semantic_density,
+            "semantic_density": semantic_density,
+            "coherence_score": float(coherence),
+            "distillation_efficiency": float(
+                semantic_density * np.log1p(freq) * (0.5 + 0.5 * coherence)
+            ),
+        })
+
+    del doc_corpus
+    gc.collect()
+    return pd.DataFrame(distill_data).sort_values(
+        "distillation_efficiency", ascending=False
+    )
+
+
+# ============================================================================
+# LEGACY GRAPH CONSTRUCTION (FALLBACK)
+# ============================================================================
+def build_hybrid_graph(
+    all_concepts: List[List[str]],
+    valid_concepts: List[str],
+    concept_to_id: Dict[str, int],
+    embed_model=None,
+    config: Dict = None,
+    ontology: DomainOntology = None,
+) -> nx.Graph:
+    if config is None:
+        config = get_adaptive_config(3000)
+    nx_graph = nx.Graph()
+    for c in valid_concepts:
+        concept_type = ontology.get_concept_type(c).value if ontology else 'general'
+        definition = ontology.get_definition(c) if ontology else ''
+        nx_graph.add_node(
+            c, frequency=0, concept_type=concept_type, definition=definition,
+        )
+    for concepts in all_concepts:
+        valid_in_doc = [c for c in concepts if c in concept_to_id]
+        for i in range(len(valid_in_doc)):
+            for j in range(i + 1, len(valid_in_doc)):
+                u, v = valid_in_doc[i], valid_in_doc[j]
+                if nx_graph.has_edge(u, v):
+                    nx_graph[u][v]['weight'] += 1
+                    nx_graph[u][v]['cooccurrence'] += 1
+                else:
+                    nx_graph.add_edge(
+                        u, v, weight=1, cooccurrence=1, semantic=0,
+                        edge_type='cooccurrence',
+                    )
+                nx_graph.nodes[u]['frequency'] = (
+                    nx_graph.nodes[u].get('frequency', 0) + 1
+                )
+                nx_graph.nodes[v]['frequency'] = (
+                    nx_graph.nodes[v].get('frequency', 0) + 1
+                )
+    if embed_model and len(valid_concepts) >= 10:
+        try:
+            with torch.no_grad():
+                embeddings = embed_model.encode(
+                    valid_concepts, show_progress_bar=False,
+                    batch_size=64, convert_to_numpy=True,
+                )
+            sim_matrix = cosine_similarity(embeddings)
+            sim_thresh = config.get("SIMILARITY_THRESHOLD", 0.85)
+            for i, c1 in enumerate(valid_concepts):
+                for j, c2 in enumerate(valid_concepts[i + 1:], start=i + 1):
+                    if c1 == c2 or nx_graph.has_edge(c1, c2):
+                        continue
+                    sim = sim_matrix[i][j]
+                    if sim > sim_thresh and (
+                        nx_graph.degree(c1) < 3 or nx_graph.degree(c2) < 3
+                    ):
+                        nx_graph.add_edge(
+                            c1, c2, weight=sim * 2, cooccurrence=0,
+                            semantic=sim, edge_type='semantic',
+                        )
+            del embeddings, sim_matrix
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception as e:
+            st.warning(f"Semantic edge addition skipped: {e}")
+    cooc_weight = config.get("COOCCURRENCE_WEIGHT", 0.9)
+    sem_weight = config.get("SEMANTIC_WEIGHT", 0.1)
+    for u, v, data in nx_graph.edges(data=True):
+        cooc = data.get('cooccurrence', 0)
+        sem = data.get('semantic', 0)
+        data['weight'] = cooc_weight * cooc + sem_weight * sem
+    return nx_graph
+
+
+def sample_edges_for_training(
+    nx_graph: nx.Graph,
+    valid_concepts: List[str],
+    concept_to_id: Dict[str, int],
+    config: Dict = None,
+    memory_safe: bool = False,
+) -> Tuple[List[Tuple], List[Tuple]]:
+    pos_pairs = [(concept_to_id[u], concept_to_id[v]) for u, v in nx_graph.edges()]
+    neg_pairs: List[Tuple[int, int]] = []
+    n_nodes = len(valid_concepts)
+    if n_nodes < 3:
+        return pos_pairs, neg_pairs
+    if memory_safe:
+        target_negs = min(len(pos_pairs) * 2 if pos_pairs else 30, 2000)
+    else:
+        target_negs = min(len(pos_pairs) * 3 if pos_pairs else 30, 5000)
+    attempts = 0
+    max_attempts = 50000
+    if memory_safe:
+        path_lengths = {}
+    else:
+        try:
+            path_lengths = dict(nx.all_pairs_shortest_path_length(nx_graph, cutoff=3))
+        except Exception:
+            path_lengths = {}
+    while len(neg_pairs) < target_negs and attempts < max_attempts:
+        u_idx, v_idx = np.random.choice(n_nodes, 2, replace=False)
+        u_c, v_c = valid_concepts[u_idx], valid_concepts[v_idx]
+        if nx_graph.has_edge(u_c, v_c):
+            attempts += 1
+            continue
+        dist = path_lengths.get(u_c, {}).get(v_c, 999)
+        if dist == 2 or dist == 3:
+            neg_pairs.append((int(u_idx), int(v_idx)))
+        elif dist == 999 and np.random.rand() < 0.1:
+            neg_pairs.append((int(u_idx), int(v_idx)))
+        attempts += 1
+    while len(neg_pairs) < target_negs:
+        u_idx, v_idx = np.random.choice(n_nodes, 2, replace=False)
+        if not nx_graph.has_edge(valid_concepts[u_idx], valid_concepts[v_idx]):
+            neg_pairs.append((int(u_idx), int(v_idx)))
+    return pos_pairs, neg_pairs
+
+
+# ============================================================================
+# GNN MODEL
+# ============================================================================
+class SparseGraphSAGE(nn.Module):
+    def __init__(self, in_dim: int, hidden_dim: int = 128) -> None:
+        super().__init__()
+        self.lin1 = nn.Linear(in_dim, hidden_dim)
+        self.lin2 = nn.Linear(hidden_dim, hidden_dim)
+        self.decoder = nn.Sequential(
+            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1),
+        )
+
+    def forward(
+        self, adj_indices, adj_values, num_nodes, h,
+        pos_u, pos_v, neg_u, neg_v,
+    ):
+        A = sparse.FloatTensor(
+            adj_indices, adj_values, torch.Size([num_nodes, num_nodes])
+        ).to(h.device)
+        deg = torch.sparse.sum(A, dim=1).to_dense().clamp(min=1)
+        deg_inv = 1.0 / deg
+        h1 = F.relu(
+            self.lin1(torch.sparse.mm(A, h) * deg_inv.unsqueeze(1))
+        )
+        h2 = self.lin2(torch.sparse.mm(A, h1) * deg_inv.unsqueeze(1))
+        pos_scores = self.decoder(
+            torch.cat([h2[pos_u], h2[pos_v]], dim=1)
+        ).squeeze(1)
+        neg_scores = self.decoder(
+            torch.cat([h2[neg_u], h2[neg_v]], dim=1)
+        ).squeeze(1)
+        return pos_scores, neg_scores, h2
+
+
+def train_gnn(
+    node_features, nx_graph, concept_to_id, pos_pairs, neg_pairs,
+    progress_callback=None, epochs: int = 50, lr: float = 1e-3,
+):
+    num_nodes = len(concept_to_id)
+    in_dim = node_features.shape[1] if node_features.numel() > 0 else 384
+    if not pos_pairs:
+        nodes = list(concept_to_id.values())
+        if len(nodes) >= 2:
+            pos_pairs = [(nodes[0], nodes[1])]
+        else:
+            raise ValueError("Cannot train GNN with fewer than 2 concepts")
+    unique_edges = {(min(u, v), max(u, v)) for u, v in pos_pairs}
+    src_adj = torch.tensor([u for u, v in unique_edges], dtype=torch.long)
+    dst_adj = torch.tensor([v for u, v in unique_edges], dtype=torch.long)
+    adj_indices = torch.stack([src_adj, dst_adj], dim=0)
+    adj_values = torch.ones(adj_indices.shape[1], dtype=torch.float32)
+    target_device = (
+        node_features.device if node_features.numel() > 0
+        else torch.device('cpu')
+    )
+    pos_u = torch.tensor(
+        [p[0] for p in pos_pairs], dtype=torch.long, device=target_device
+    )
+    pos_v = torch.tensor(
+        [p[1] for p in pos_pairs], dtype=torch.long, device=target_device
+    )
+    neg_u = (
+        torch.tensor(
+            [n[0] for n in neg_pairs], dtype=torch.long, device=target_device
+        )
+        if neg_pairs
+        else torch.tensor([], dtype=torch.long, device=target_device)
+    )
+    neg_v = (
+        torch.tensor(
+            [n[1] for n in neg_pairs], dtype=torch.long, device=target_device
+        )
+        if neg_pairs
+        else torch.tensor([], dtype=torch.long, device=target_device)
+    )
+    model = SparseGraphSAGE(in_dim=in_dim, hidden_dim=128).to(target_device)
+    optimizer = optim.Adam(model.parameters(), lr=lr)
+    criterion = nn.BCEWithLogitsLoss()
+    for epoch in range(epochs):
+        model.train()
+        optimizer.zero_grad()
+        if len(neg_pairs) == 0:
+            pos_out, _, _ = model(
+                adj_indices, adj_values, num_nodes, node_features,
+                pos_u, pos_v, pos_u[:1], pos_v[:1],
+            )
+            loss = criterion(pos_out, torch.ones_like(pos_out)) * 0.5
+        else:
+            pos_out, neg_out, _ = model(
+                adj_indices, adj_values, num_nodes, node_features,
+                pos_u, pos_v, neg_u, neg_v,
+            )
+            pos_loss = criterion(pos_out, torch.ones_like(pos_out))
+            neg_loss = criterion(neg_out, torch.zeros_like(neg_out))
+            loss = 0.5 * (pos_loss + neg_loss)
+        loss.backward()
+        optimizer.step()
+        if progress_callback and epoch % 10 == 0:
+            progress_callback(epoch, loss.item())
+    model.eval()
+    with torch.no_grad():
+        _, _, final_embeddings = model(
+            adj_indices, adj_values, num_nodes, node_features,
+            pos_u[:1], pos_v[:1],
+            neg_u[:1] if len(neg_pairs) > 0 else pos_u[:1],
+            neg_v[:1] if len(neg_pairs) > 0 else pos_v[:1],
+        )
+    return model, final_embeddings.cpu(), adj_indices.cpu(), adj_values.cpu()
+
+
+# ============================================================================
+# RESEARCH DIRECTION SCORING
+# ============================================================================
+def compute_research_direction_scores(
+    model, node_features, final_emb, nx_graph,
+    valid_concepts, concept_properties, ridge,
+    embed_model, n_samples: int = 5000,
+) -> pd.DataFrame:
+    n_concepts = len(valid_concepts)
+    if n_concepts < 3:
+        return pd.DataFrame()
+    u_ids = np.random.randint(
+        n_concepts, size=min(n_samples, n_concepts * 5)
+    )
+    v_ids = np.random.randint(
+        n_concepts, size=min(n_samples, n_concepts * 5)
+    )
+    candidate_pairs: List[Tuple[int, int, str, str]] = []
+    for u_idx, v_idx in zip(u_ids, v_ids):
+        if u_idx == v_idx:
+            continue
+        u_c, v_c = valid_concepts[u_idx], valid_concepts[v_idx]
+        if nx_graph.has_edge(u_c, v_c):
+            continue
+        candidate_pairs.append((int(u_idx), int(v_idx), u_c, v_c))
+    if not candidate_pairs:
+        return pd.DataFrame()
+    u_tensor = torch.tensor([p[0] for p in candidate_pairs], dtype=torch.long)
+    v_tensor = torch.tensor([p[1] for p in candidate_pairs], dtype=torch.long)
+    model.eval()
+    with torch.no_grad():
+        pair_features = torch.cat(
+            [final_emb[u_tensor], final_emb[v_tensor]], dim=1
+        )
+        gnn_logits = model.decoder(pair_features).squeeze(1)
+        gnn_scores = torch.sigmoid(gnn_logits).numpy()
+    with torch.no_grad():
+        emb_np = embed_model.encode(
+            valid_concepts, show_progress_bar=False,
+            batch_size=64, convert_to_numpy=True,
+        )
+    cos_sims = np.sum(
+        emb_np[u_tensor.numpy()] * emb_np[v_tensor.numpy()], axis=1
+    )
+    results: List[Dict[str, Any]] = []
+    for i, (u_idx, v_idx, u_c, v_c) in enumerate(candidate_pairs):
+        p_u = concept_properties.get(u_c, 0)
+        p_v = concept_properties.get(v_c, 0)
+        expected_improvement = 0
+        if ridge is not None and (p_u > 0 or p_v > 0):
+            try:
+                expected_improvement = float(
+                    ridge.predict([[p_u, p_v, 1.0]])[0]
+                )
+            except Exception:
+                expected_improvement = max(p_u, p_v) * 1.05
+        semantic_novelty = 1.0 - cos_sims[i]
+        feasibility = (
+            np.exp(-0.5 * semantic_novelty)
+            * (1.0 if (p_u > 0 or p_v > 0) else 0.6)
+        )
+        alpha = {'gnn': 0.4, 'novelty': 0.3, 'gain': 0.2, 'feas': -0.1}
+        norm_gain = (
+            np.clip((expected_improvement - 50) / 200, 0, 1)
+            if expected_improvement > 0 else 0
+        )
+        D_uv = (
+            alpha['gnn'] * gnn_scores[i]
+            + alpha['novelty'] * semantic_novelty
+            + alpha['gain'] * norm_gain
+            + alpha['feas'] * (1.0 - feasibility)
+        )
+        results.append({
+            'concept_u': u_c, 'concept_v': v_c,
+            'gnn_affinity': float(gnn_scores[i]),
+            'semantic_novelty': float(semantic_novelty),
+            'expected_property_gain': expected_improvement,
+            'feasibility_score': float(feasibility),
+            'composite_score': float(D_uv),
+        })
+    df = pd.DataFrame(results).sort_values('composite_score', ascending=False)
+    del emb_np
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    return df.head(min(100, len(df)))
+
+
+# ============================================================================
+# MATHEMATICAL VALIDATION
+# ============================================================================
+def validate_graph_metrics(
+    nx_graph: nx.Graph, valid_concepts: List[str]
+) -> Dict[str, Any]:
+    metrics: Dict[str, Any] = {}
+    if nx_graph.number_of_nodes() < 3:
+        return metrics
+    try:
+        from networkx.algorithms import community
+        partition = list(community.greedy_modularity_communities(nx_graph))
+        metrics["modularity"] = community.modularity(nx_graph, partition)
+        metrics["n_communities"] = len(partition)
+    except Exception:
+        metrics["modularity"] = 0.0
+        metrics["n_communities"] = 0
+    try:
+        embed_model = load_embedding_model()
+        with torch.no_grad():
+            embeddings = embed_model.encode(
+                valid_concepts, show_progress_bar=False,
+                batch_size=64, convert_to_numpy=True,
+            )
+        if len(valid_concepts) >= 3:
+            labels = np.zeros(len(valid_concepts))
+            for i, c in enumerate(valid_concepts):
+                for idx, comm in enumerate(
+                    partition if 'partition' in locals() else [[]]
+                ):
+                    if c in comm:
+                        labels[i] = idx
+                        break
+            metrics["silhouette_score"] = silhouette_score(embeddings, labels)
+        else:
+            metrics["silhouette_score"] = 0.0
+        del embeddings
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        metrics["silhouette_score"] = 0.0
+    weights = [d.get('weight', 1) for _, _, d in nx_graph.edges(data=True)]
+    if len(weights) > 10:
+        p_values = []
+        for w in weights[:50]:
+            permuted = np.random.permutation(weights)
+            p_values.append(np.sum(permuted >= w) / len(weights))
+        metrics["edge_significance_p_mean"] = float(np.mean(p_values))
+        metrics["edge_significant_count"] = int(
+            sum(1 for p in p_values if p < 0.05)
+        )
+    else:
+        metrics["edge_significance_p_mean"] = 1.0
+        metrics["edge_significant_count"] = 0
+    try:
+        metrics["avg_betweenness"] = np.mean(
+            list(nx.betweenness_centrality(nx_graph).values())
+        )
+        metrics["avg_closeness"] = np.mean(
+            list(nx.closeness_centrality(nx_graph).values())
+        )
+    except Exception:
+        pass
+    return metrics
+
+
+@st.cache_data(ttl=3600)
+def compute_bootstrap_ci(
+    scores: np.ndarray, n_bootstrap: int = 500, alpha: float = 0.05
+) -> Tuple[float, float, float]:
+    if len(scores) < 2:
+        return float(np.mean(scores)), 0.0, 0.0
+    boot_means: List[float] = []
+    for _ in range(n_bootstrap):
+        sample = np.random.choice(scores, size=len(scores), replace=True)
+        boot_means.append(float(np.mean(sample)))
+    ci_low = float(np.percentile(boot_means, 100 * alpha / 2))
+    ci_high = float(np.percentile(boot_means, 100 * (1 - alpha / 2)))
+    return float(np.mean(scores)), ci_low, ci_high
+
+
+# ============================================================================
+# ADVANCED ANALYTICS (CACHED)
+# ============================================================================
+@st.cache_data(ttl=3600, show_spinner=False)
+def detect_keyword_bursts(
+    df_filtered: pd.DataFrame,
+    valid_concepts: List[str],
+    concept_abstract_map: Dict[str, List[int]],
+    text_columns: List[str],
+    burst_threshold: float = 2.0,
+) -> pd.DataFrame:
+    if "Year" not in df_filtered.columns or df_filtered["Year"].isna().all():
+        return pd.DataFrame(columns=["concept", "burst_score", "burst_year", "total_mentions", "year_range"])
+    years = df_filtered["Year"].dropna().astype(int)
+    if len(years.unique()) < 3:
+        return pd.DataFrame(columns=["concept", "burst_score", "burst_year", "total_mentions", "year_range"])
+    year_range = sorted(years.unique())
+    burst_data: List[Dict[str, Any]] = []
+    for concept in valid_concepts:
+        doc_indices = concept_abstract_map.get(concept, [])
+        if len(doc_indices) < 5:
+            continue
+        concept_years: List[int] = []
+        for idx in doc_indices:
+            if (
+                idx < len(df_filtered)
+                and pd.notna(df_filtered.iloc[idx].get("Year"))
+            ):
+                concept_years.append(int(df_filtered.iloc[idx]["Year"]))
+        if len(concept_years) < 3:
+            continue
+        year_counts = Counter(concept_years)
+        counts = [year_counts.get(y, 0) for y in year_range]
+        if len(counts) < 3:
+            continue
+        window = max(2, len(counts) // 5)
+        moving_avg = pd.Series(counts).rolling(
+            window=window, min_periods=1
+        ).mean()
+        burst_scores: List[float] = []
+        for i in range(window, len(counts)):
+            if moving_avg.iloc[i - 1] > 0:
+                ratio = counts[i] / max(moving_avg.iloc[i - 1], 0.1)
+                burst_scores.append(float(ratio))
+        if burst_scores:
+            max_burst = max(burst_scores)
+            burst_year = year_range[window + burst_scores.index(max_burst)]
+            if max_burst >= burst_threshold:
+                burst_data.append({
+                    "concept": concept,
+                    "burst_score": round(max_burst, 2),
+                    "burst_year": burst_year,
+                    "total_mentions": len(concept_years),
+                    "year_range": f"{min(concept_years)}-{max(concept_years)}",
+                })
+    if not burst_data:
+
+        return pd.DataFrame(columns=["concept", "burst_score", "burst_year", "total_mentions", "year_range"])
+
+    return pd.DataFrame(burst_data).sort_values(
+        "burst_score", ascending=False
+    )
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def detect_semantic_drift(
+    df_filtered: pd.DataFrame,
+    valid_concepts: List[str],
+    concept_abstract_map: Dict[str, List[int]],
+    text_columns: List[str],
+    early_fraction: float = 0.3,
+    late_fraction: float = 0.3,
+) -> pd.DataFrame:
+    if "Year" not in df_filtered.columns or df_filtered["Year"].isna().all():
+        return pd.DataFrame(columns=["concept", "semantic_drift", "early_papers", "late_papers", "early_period", "late_period"])
+    years = df_filtered["Year"].dropna().astype(int)
+    if len(years.unique()) < 4:
+        return pd.DataFrame(columns=["concept", "semantic_drift", "early_papers", "late_papers", "early_period", "late_period"])
+    embed_model = load_embedding_model()
+    sorted_years = sorted(years.unique())
+    n_years = len(sorted_years)
+    early_cutoff = sorted_years[int(n_years * early_fraction)]
+    late_cutoff = sorted_years[int(n_years * (1 - late_fraction))]
+    drift_data: List[Dict[str, Any]] = []
+    for concept in valid_concepts:
+        doc_indices = concept_abstract_map.get(concept, [])
+        if len(doc_indices) < 10:
+            continue
+        early_texts: List[str] = []
+        late_texts: List[str] = []
+        for idx in doc_indices:
+            if idx >= len(df_filtered):
+                continue
+            row = df_filtered.iloc[idx]
+            year = row.get("Year")
+            if pd.isna(year):
+                continue
+            year = int(year)
+            text = " ".join([
+                str(row.get(col, ""))
+                for col in text_columns if pd.notna(row.get(col))
+            ])
+            if year <= early_cutoff:
+                early_texts.append(text)
+            elif year >= late_cutoff:
+                late_texts.append(text)
+        if len(early_texts) < 3 or len(late_texts) < 3:
+            continue
+        try:
+            with torch.no_grad():
+                early_emb = embed_model.encode(
+                    early_texts, show_progress_bar=False,
+                    batch_size=32, convert_to_numpy=True,
+                )
+                late_emb = embed_model.encode(
+                    late_texts, show_progress_bar=False,
+                    batch_size=32, convert_to_numpy=True,
+                )
+            early_centroid = np.mean(early_emb, axis=0)
+            late_centroid = np.mean(late_emb, axis=0)
+            drift = 1.0 - cosine_similarity(
+                [early_centroid], [late_centroid]
+            )[0][0]
+            drift_data.append({
+                "concept": concept,
+                "semantic_drift": round(float(drift), 4),
+                "early_papers": len(early_texts),
+                "late_papers": len(late_texts),
+                "early_period": f"{sorted_years[0]}-{early_cutoff}",
+                "late_period": f"{late_cutoff}-{sorted_years[-1]}",
+            })
+            del early_emb, late_emb
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            continue
+    if not drift_data:
+
+        return pd.DataFrame(columns=["concept", "semantic_drift", "early_papers", "late_papers", "early_period", "late_period"])
+
+    return pd.DataFrame(drift_data).sort_values(
+        "semantic_drift", ascending=False
+    )
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def build_concept_genealogy(
+    _nx_graph: nx.Graph,
+    valid_concepts: List[str],
+    concept_abstract_map: Dict[str, List[int]],
+) -> pd.DataFrame:
+    if _nx_graph.number_of_nodes() < 5:
+        return pd.DataFrame()
+    try:
+        pagerank = nx.pagerank(_nx_graph, weight='weight')
+    except Exception:
+        pagerank = {n: 1.0 for n in _nx_graph.nodes()}
+    try:
+        betweenness = nx.betweenness_centrality(_nx_graph, weight='weight')
+    except Exception:
+        betweenness = {n: 0.0 for n in _nx_graph.nodes()}
+    genealogy_data: List[Dict[str, Any]] = []
+    for concept in valid_concepts:
+        if concept not in _nx_graph:
+            continue
+        pr = pagerank.get(concept, 0)
+        bc = betweenness.get(concept, 0)
+        freq = len(concept_abstract_map.get(concept, []))
+        degree = _nx_graph.degree(concept)
+        if (
+            pr > np.percentile(list(pagerank.values()), 75)
+            and degree > np.percentile(
+                [_nx_graph.degree(n) for n in _nx_graph.nodes()], 75
+            )
+        ):
+            generation = "Foundational (Parent)"
+        elif (
+            pr < np.percentile(list(pagerank.values()), 25)
+            and degree < np.percentile(
+                [_nx_graph.degree(n) for n in _nx_graph.nodes()], 25
+            )
+        ):
+            generation = "Emerging (Child)"
+        else:
+            generation = "Intermediate"
+        genealogy_data.append({
+            "concept": concept,
+            "pagerank": round(pr, 5),
+            "betweenness": round(bc, 5),
+            "frequency": freq,
+            "degree": degree,
+            "generation": generation,
+        })
+    if not genealogy_data:
+
+        return pd.DataFrame(columns=["concept", "pagerank", "betweenness", "frequency", "degree", "generation"])
+
+    return pd.DataFrame(genealogy_data).sort_values(
+        "pagerank", ascending=False
+    )
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def detect_cross_domain_bridges(
+    _nx_graph: nx.Graph,
+    valid_concepts: List[str],
+    concept_abstract_map: Dict[str, List[int]],
+) -> pd.DataFrame:
+    if _nx_graph.number_of_nodes() < 5:
+        return pd.DataFrame()
+    category_map = abstract_concepts_to_categories(valid_concepts)
+    try:
+        betweenness = nx.betweenness_centrality(_nx_graph, weight='weight')
+    except Exception:
+        betweenness = {n: 0.0 for n in _nx_graph.nodes()}
+    bridge_data: List[Dict[str, Any]] = []
+    for concept in valid_concepts:
+        if concept not in _nx_graph:
+            continue
+        neighbors = list(_nx_graph.neighbors(concept))
+        if len(neighbors) < 2:
+            continue
+        own_cat = category_map.get(concept, 'general')
+        neighbor_cats = [category_map.get(n, 'general') for n in neighbors]
+        unique_cats = set(neighbor_cats)
+        if len(unique_cats) < 2:
+            continue
+        bridge_score = betweenness.get(concept, 0) * len(unique_cats)
+        bridge_data.append({
+            "concept": concept,
+            "bridge_score": round(bridge_score, 4),
+            "betweenness": round(betweenness.get(concept, 0), 4),
+            "connected_categories": len(unique_cats),
+            "categories": ", ".join(sorted(unique_cats)),
+            "degree": len(neighbors),
+            "own_category": own_cat,
+        })
+    if not bridge_data:
+
+        return pd.DataFrame(columns=["concept", "bridge_score", "betweenness", "connected_categories", "categories", "degree", "own_category"])
+
+    return pd.DataFrame(bridge_data).sort_values(
+        "bridge_score", ascending=False
+    )
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def analyze_network_motifs(_nx_graph: nx.Graph) -> Dict[str, Any]:
+    if _nx_graph.number_of_nodes() < 3:
+        return {}
+    motifs: Dict[str, Any] = {}
+    try:
+        triangles = nx.triangles(_nx_graph)
+        motifs["total_triangles"] = sum(triangles.values()) // 3
+        motifs["avg_triangles_per_node"] = round(
+            np.mean(list(triangles.values())), 2
+        )
+        motifs["nodes_in_triangles"] = sum(
+            1 for v in triangles.values() if v > 0
+        )
+    except Exception:
+        motifs["total_triangles"] = 0
+    try:
+        cliques = list(nx.find_cliques(_nx_graph))
+        clique_sizes = [len(c) for c in cliques]
+        motifs["total_cliques"] = len(cliques)
+        motifs["max_clique_size"] = max(clique_sizes) if clique_sizes else 0
+        motifs["avg_clique_size"] = (
+            round(np.mean(clique_sizes), 2) if clique_sizes else 0
+        )
+        motifs["4cliques"] = sum(1 for c in clique_sizes if c >= 4)
+    except Exception:
+        motifs["total_cliques"] = 0
+    try:
+        clustering = nx.clustering(_nx_graph)
+        stars: List[Tuple[str, int, float]] = []
+        for node in _nx_graph.nodes():
+            deg = _nx_graph.degree(node)
+            clust = clustering.get(node, 0)
+            if deg >= 5 and clust < 0.2:
+                stars.append((node, deg, clust))
+        stars.sort(key=lambda x: x[1], reverse=True)
+        motifs["star_motifs"] = len(stars)
+        motifs["top_stars"] = stars[:10]
+    except Exception:
+        motifs["star_motifs"] = 0
+    return motifs
+
+
+# ============================================================================
+# CENTRALITY & DEGREE DISTRIBUTION
+# ============================================================================
+def compute_centrality_comparison(
+    nx_graph: nx.Graph, valid_concepts: List[str]
+) -> pd.DataFrame:
+    if nx_graph.number_of_nodes() < 3:
+        return pd.DataFrame()
+    centrality_data: List[Dict[str, Any]] = []
+    try:
+        degree_c = dict(nx_graph.degree())
+        betweenness_c = nx.betweenness_centrality(nx_graph, weight='weight')
+        closeness_c = nx.closeness_centrality(nx_graph)
+        eigenvector_c = nx.eigenvector_centrality(
+            nx_graph, weight='weight', max_iter=1000
+        )
+        pagerank_c = nx.pagerank(nx_graph, weight='weight')
+        for concept in valid_concepts:
+            if concept not in nx_graph:
+                continue
+            centrality_data.append({
+                "concept": concept,
+                "degree": degree_c.get(concept, 0),
+                "betweenness": round(betweenness_c.get(concept, 0), 5),
+                "closeness": round(closeness_c.get(concept, 0), 5),
+                "eigenvector": round(eigenvector_c.get(concept, 0), 5),
+                "pagerank": round(pagerank_c.get(concept, 0), 5),
+            })
+    except Exception as e:
+        st.warning(f"Centrality computation error: {e}")
+    return pd.DataFrame(centrality_data)
+
+
+def plot_degree_distribution(
+    nx_graph: nx.Graph, theme: Dict = None
+) -> go.Figure:
+    if theme is None:
+        theme = THEME_PRESETS["Bright (Default)"]
+    degrees = [d for n, d in nx_graph.degree()]
+    if len(degrees) < 3:
+        return go.Figure()
+    degree_counts = Counter(degrees)
+    x = sorted(degree_counts.keys())
+    y = [degree_counts[k] for k in x]
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=x, y=y, mode='markers', name='Degree Distribution',
+        marker=dict(size=10, color=theme.get('highlight_bg', '#ff6b6b')),
+    ))
+    fig.update_layout(
+        title="Degree Distribution (Log-Log)",
+        xaxis_type="log", yaxis_type="log",
+        xaxis_title="Degree (k)", yaxis_title="Frequency P(k)",
+        paper_bgcolor=theme.get("plotly_paper", "#ffffff"),
+        plot_bgcolor=theme.get("plotly_bg", "#ffffff"),
+        font_color=theme.get("font", "#000000"),
+    )
+    return fig
+
+
+# ============================================================================
+# PUBLICATION-READY EXPORTS
+# ============================================================================
+def export_publication_figure(
+    nx_graph, valid_concepts, concept_abstract_map,
+    cmap_name="viridis", dpi=300, figsize=(14, 12),
+    filename="sib_graph_pub.png",
+) -> bytes:
+    try:
+        pos = nx.spring_layout(nx_graph, seed=42, k=2.5, iterations=200)
+        plt.figure(figsize=figsize, dpi=dpi)
+        node_colors = [get_sib_category_color(n) for n in nx_graph.nodes()]
+        node_sizes = [
+            max(100, min(800, len(concept_abstract_map.get(n, [])) * 20 + 50))
+            for n in nx_graph.nodes()
+        ]
+        nx.draw(
+            nx_graph, pos,
+            with_labels=True,
+            node_color=node_colors,
+            edge_color='lightgray',
+            node_size=node_sizes,
+            font_size=6,
+            font_weight='bold',
+            edgecolors='white',
+            linewidths=1.5,
+            width=0.5,
+            alpha=0.9,
+        )
+        plt.title(
+            "Sodium-Ion Battery Quantitative Descriptor Graph",
+            fontsize=14, fontweight='bold', pad=20,
+        )
+        buf = io.BytesIO()
+        plt.savefig(
+            buf, format='png', dpi=dpi, bbox_inches='tight',
+            facecolor='white', edgecolor='none',
+        )
+        buf.seek(0)
+        plt.close()
+        return buf.read()
+    except Exception as e:
+        st.error(f"Publication figure export failed: {e}")
+        return b''
+
+
+def generate_analysis_report(
+    nx_graph, valid_concepts, concept_abstract_map,
+    top_scores, distill_df, burst_df, drift_df,
+    genealogy_df, bridge_df, motifs, val_metrics,
+    df_filtered,
+) -> str:
+    report: List[str] = []
+    report.append("# Sodium-Ion Battery Quantitative Descriptor Graph Analysis Report")
+    report.append(
+        f"\n*Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}*\n"
+    )
+    report.append("## 1. Dataset Overview")
+    report.append(f"- **Total Records**: {len(df_filtered)}")
+    if 'Year' in df_filtered.columns:
+        years = df_filtered['Year'].dropna()
+        report.append(
+            f"- **Year Range**: {int(years.min())} - {int(years.max())}"
+        )
+    report.append(f"- **Total Concepts**: {len(valid_concepts)}")
+    report.append(f"- **Total Edges**: {nx_graph.number_of_edges()}")
+    report.append(f"- **Graph Density**: {nx.density(nx_graph):.4f}")
+    report.append("")
+    report.append("## 2. Top Concepts by Frequency")
+    top_concepts = sorted(
+        valid_concepts,
+        key=lambda c: len(concept_abstract_map.get(c, [])),
+        reverse=True,
+    )[:20]
+    for i, c in enumerate(top_concepts, 1):
+        freq = len(concept_abstract_map.get(c, []))
+        deg = nx_graph.degree(c)
+        report.append(f"{i}. **{c}** - Freq: {freq}, Degree: {deg}")
+    report.append("")
+    report.append("## 3. Concept Distillation Efficiency (Top 15)")
+    if not distill_df.empty:
+        for _, row in distill_df.head(15).iterrows():
+            report.append(
+                f"- **{row['concept']}**: Efficiency="
+                f"{row['distillation_efficiency']:.3f}, "
+                f"Freq={row['frequency']}, "
+                f"Coherence={row['coherence_score']:.3f}"
+            )
+    report.append("")
+    report.append("## 4. Research Direction Recommendations (Top 10)")
+    if not top_scores.empty:
+        for i, (_, row) in enumerate(top_scores.head(10).iterrows(), 1):
+            report.append(
+                f"{i}. **{row['concept_u']}** + **{row['concept_v']}** - "
+                f"Composite Score: {row['composite_score']:.3f}"
+            )
+    report.append("")
+    report.append("## 5. Keyword Burst Detection")
+    if not burst_df.empty:
+        for _, row in burst_df.head(10).iterrows():
+            report.append(
+                f"- **{row['concept']}**: Burst Score={row['burst_score']:.2f} "
+                f"(Year {row['burst_year']})"
+            )
+    else:
+        report.append("No significant keyword bursts detected.")
+    report.append("")
+    report.append("## 6. Semantic Drift Detection")
+    if not drift_df.empty:
+        for _, row in drift_df.head(10).iterrows():
+            report.append(
+                f"- **{row['concept']}**: Drift={row['semantic_drift']:.4f} "
+                f"({row['early_period']} -> {row['late_period']})"
+            )
+    else:
+        report.append("No significant semantic drift detected.")
+    report.append("")
+    report.append("## 7. Cross-Domain Bridge Concepts")
+    if not bridge_df.empty:
+        for _, row in bridge_df.head(10).iterrows():
+            report.append(
+                f"- **{row['concept']}**: Bridge Score={row['bridge_score']:.4f}, "
+                f"Connects {row['connected_categories']} categories"
+            )
+    else:
+        report.append("No cross-domain bridges detected.")
+    report.append("")
+    report.append("## 8. Network Motif Analysis")
+    report.append(f"- Total Triangles: {motifs.get('total_triangles', 0)}")
+    report.append(f"- Total Cliques: {motifs.get('total_cliques', 0)}")
+    report.append(f"- Max Clique Size: {motifs.get('max_clique_size', 0)}")
+    report.append(f"- Star Motifs: {motifs.get('star_motifs', 0)}")
+    report.append("")
+    report.append("## 9. Graph Validation Metrics")
+    report.append(f"- Modularity: {val_metrics.get('modularity', 0):.3f}")
+    report.append(
+        f"- Silhouette Score: {val_metrics.get('silhouette_score', 0):.3f}"
+    )
+    report.append(f"- Number of Communities: {val_metrics.get('n_communities', 0)}")
+    report.append(f"- Avg Betweenness: {val_metrics.get('avg_betweenness', 0):.3f}")
+    report.append("")
+    report.append("---")
+    report.append("*Report generated by Sodium-Ion Battery Quantitative Descriptor Graph v6.1*")
+    return "\n".join(report)
+
+
+# ============================================================================
+# GRAPH EDIT HISTORY (AgNPs pattern: max_history=20)
+# ============================================================================
+class GraphEditHistory:
+    def __init__(self, max_history: int = 20) -> None:
+        self.history: deque = deque(maxlen=max_history)
+        self.redo_stack: deque = deque(maxlen=max_history)
+        self._snapshot_counter = 0
+
+    def save_snapshot(
+        self, nx_graph, valid_concepts, concept_to_id,
+        id_to_concept, concept_abstract_map,
+    ) -> int:
+        snapshot = {
+            'id': self._snapshot_counter,
+            'nx_graph': copy.copy(nx_graph),
+            'valid_concepts': list(valid_concepts),
+            'concept_to_id': dict(concept_to_id),
+            'id_to_concept': dict(id_to_concept),
+            'concept_abstract_map': {
+                k: list(v) for k, v in concept_abstract_map.items()
+            },
+            'timestamp': datetime.now().isoformat(),
+        }
+        self.history.append(snapshot)
+        self._snapshot_counter += 1
+        self.redo_stack.clear()
+        return snapshot['id']
+
+    def undo(self) -> Optional[Dict]:
+        if len(self.history) < 2:
+            return None
+        current = self.history.pop()
+        self.redo_stack.append(current)
+        previous = self.history[-1]
+        return previous
+
+    def redo(self) -> Optional[Dict]:
+        if not self.redo_stack:
+            return None
+        snapshot = self.redo_stack.pop()
+        self.history.append(snapshot)
+        return snapshot
+
+    def can_undo(self) -> bool:
+        return len(self.history) >= 2
+
+    def can_redo(self) -> bool:
+        return len(self.redo_stack) > 0
+
+    def get_history_summary(self) -> List[str]:
+        return [
+            f"Snapshot {s['id']} @ {s['timestamp']}" for s in self.history
+        ]
+
+
+# ============================================================================
+# THEME CONFIGURATION
+# ============================================================================
+THEME_PRESETS = {
+    "Bright (Default)": {
+        "bg": "#ffffff", "font": "#1e293b",
+        "tooltip_bg": "rgba(255,255,255,0.95)",
+        "tooltip_border": "#cbd5e1", "tooltip_text": "#1e293b",
+        "edge_cooccurrence": "rgba(56, 189, 248, 0.45)",
+        "edge_semantic": "rgba(251, 146, 60, 0.40)",
+        "edge_bridge": "rgba(250, 204, 21, 0.55)",
+        "edge_inferred": "rgba(139, 92, 246, 0.50)",
+        "edge_cause": "rgba(239, 68, 68, 0.55)",
+        "edge_hypernym": "rgba(34, 197, 94, 0.45)",
+        "edge_unknown": "rgba(148, 163, 184, 0.30)",
+        "node_border": "#f8fafc", "highlight_bg": "#ff6b6b",
+        "hover_bg": "#ffd93d",
+        "shadow_color": "rgba(0,0,0,0.15)",
+        "plotly_bg": "#ffffff", "plotly_paper": "#ffffff",
+        "grid_color": "#e2e8f0", "axis_color": "#64748b",
+    },
+    "Dark": {
+        "bg": "#0f172a", "font": "#e2e8f0",
+        "tooltip_bg": "rgba(15, 23, 42, 0.95)",
+        "tooltip_border": "#334155", "tooltip_text": "#e2e8f0",
+        "edge_cooccurrence": "rgba(56, 189, 248, 0.55)",
+        "edge_semantic": "rgba(251, 146, 60, 0.50)",
+        "edge_bridge": "rgba(250, 204, 21, 0.65)",
+        "edge_inferred": "rgba(139, 92, 246, 0.60)",
+        "edge_cause": "rgba(239, 68, 68, 0.65)",
+        "edge_hypernym": "rgba(34, 197, 94, 0.55)",
+        "edge_unknown": "rgba(148, 163, 184, 0.40)",
+        "node_border": "#f8fafc", "highlight_bg": "#ff6b6b",
+        "hover_bg": "#ffd93d",
+        "shadow_color": "rgba(0,0,0,0.6)",
+        "plotly_bg": "#0f172a", "plotly_paper": "#0f172a",
+        "grid_color": "#1e293b", "axis_color": "#94a3b8",
+    },
+    "Midnight": {
+        "bg": "#020617", "font": "#f1f5f9",
+        "tooltip_bg": "rgba(2, 6, 23, 0.97)",
+        "tooltip_border": "#1e293b", "tooltip_text": "#f1f5f9",
+        "edge_cooccurrence": "rgba(99, 102, 241, 0.55)",
+        "edge_semantic": "rgba(236, 72, 153, 0.50)",
+        "edge_bridge": "rgba(34, 211, 238, 0.65)",
+        "edge_inferred": "rgba(168, 85, 247, 0.60)",
+        "edge_cause": "rgba(244, 63, 94, 0.65)",
+        "edge_hypernym": "rgba(52, 211, 153, 0.55)",
+        "edge_unknown": "rgba(71, 85, 105, 0.40)",
+        "node_border": "#e2e8f0", "highlight_bg": "#f43f5e",
+        "hover_bg": "#22d3ee",
+        "shadow_color": "rgba(0,0,0,0.7)",
+        "plotly_bg": "#020617", "plotly_paper": "#020617",
+        "grid_color": "#0f172a", "axis_color": "#64748b",
+    },
+    "Warm": {
+        "bg": "#fff7ed", "font": "#431407",
+        "tooltip_bg": "rgba(255, 247, 237, 0.97)",
+        "tooltip_border": "#fdba74", "tooltip_text": "#431407",
+        "edge_cooccurrence": "rgba(234, 88, 12, 0.45)",
+        "edge_semantic": "rgba(180, 83, 9, 0.40)",
+        "edge_bridge": "rgba(202, 138, 4, 0.55)",
+        "edge_inferred": "rgba(147, 51, 234, 0.50)",
+        "edge_cause": "rgba(220, 38, 38, 0.55)",
+        "edge_hypernym": "rgba(22, 163, 74, 0.45)",
+        "edge_unknown": "rgba(120, 53, 15, 0.25)",
+        "node_border": "#fff7ed", "highlight_bg": "#dc2626",
+        "hover_bg": "#f59e0b",
+        "shadow_color": "rgba(124, 45, 18, 0.15)",
+        "plotly_bg": "#fff7ed", "plotly_paper": "#fff7ed",
+        "grid_color": "#fed7aa", "axis_color": "#9a3412",
+    },
+    "Forest": {
+        "bg": "#f0fdf4", "font": "#052e16",
+        "tooltip_bg": "rgba(240, 253, 244, 0.97)",
+        "tooltip_border": "#86efac", "tooltip_text": "#052e16",
+        "edge_cooccurrence": "rgba(22, 163, 74, 0.45)",
+        "edge_semantic": "rgba(5, 150, 105, 0.40)",
+        "edge_bridge": "rgba(234, 179, 8, 0.55)",
+        "edge_inferred": "rgba(139, 92, 246, 0.50)",
+        "edge_cause": "rgba(239, 68, 68, 0.55)",
+        "edge_hypernym": "rgba(21, 128, 61, 0.45)",
+        "edge_unknown": "rgba(20, 83, 45, 0.25)",
+        "node_border": "#f0fdf4", "highlight_bg": "#15803d",
+        "hover_bg": "#84cc16",
+        "shadow_color": "rgba(20, 83, 45, 0.15)",
+        "plotly_bg": "#f0fdf4", "plotly_paper": "#f0fdf4",
+        "grid_color": "#bbf7d0", "axis_color": "#166534",
+    },
+    "Ocean": {
+        "bg": "#ecfeff", "font": "#083344",
+        "tooltip_bg": "rgba(236, 254, 255, 0.97)",
+        "tooltip_border": "#67e8f9", "tooltip_text": "#083344",
+        "edge_cooccurrence": "rgba(6, 182, 212, 0.45)",
+        "edge_semantic": "rgba(14, 165, 233, 0.40)",
+        "edge_bridge": "rgba(99, 102, 241, 0.55)",
+        "edge_inferred": "rgba(168, 85, 247, 0.50)",
+        "edge_cause": "rgba(244, 63, 94, 0.55)",
+        "edge_hypernym": "rgba(13, 148, 136, 0.45)",
+        "edge_unknown": "rgba(21, 94, 117, 0.25)",
+        "node_border": "#ecfeff", "highlight_bg": "#0ea5e9",
+        "hover_bg": "#22d3ee",
+        "shadow_color": "rgba(8, 51, 68, 0.15)",
+        "plotly_bg": "#ecfeff", "plotly_paper": "#ecfeff",
+        "grid_color": "#a5f3fc", "axis_color": "#0e7490",
+    },
+}
+
+PHYSICS_PRESETS = {
+    "Stable (Default)": {
+        "damping": 0.55, "gravity": -2500, "spring_length": 140,
+        "spring_strength": 0.05, "central_gravity": 0.25,
+        "stabilization": 2500,
+    },
+    "Fluid": {
+        "damping": 0.25, "gravity": -1800, "spring_length": 120,
+        "spring_strength": 0.05, "central_gravity": 0.30,
+        "stabilization": 1500,
+    },
+    "Tight": {
+        "damping": 0.70, "gravity": -4000, "spring_length": 80,
+        "spring_strength": 0.08, "central_gravity": 0.20,
+        "stabilization": 3000,
+    },
+    "Off": {
+        "damping": 0.99, "gravity": 0, "spring_length": 200,
+        "spring_strength": 0.0, "central_gravity": 0.0,
+        "stabilization": 0,
+    },
+}
+
+
+# ============================================================================
+# VISUALIZATION FUNCTIONS (AgNPs Pattern — tempfile + Glassmorphism JS)
+# ============================================================================
+def get_sib_category_color(
+    concept: str, cmap_colors: Optional[List[str]] = None
+) -> str:
+    if cmap_colors:
+        return cmap_colors[hash(concept) % len(cmap_colors)]
+    concept_lower = concept.lower()
+    category = 'general'
+    for pattern, cat in SIB_DESCRIPTOR_MAPPING.items():
+        if re.search(pattern, concept_lower):
+            category = cat
+            break
+    color_map = {
+        'cathode_material': '#1f77b4',
+        'anode_material': '#ff7f0e',
+        'electrolyte': '#2ca02c',
+        'electrochemical_property': '#d62728',
+        'phenomenon': '#9467bd',
+        'method': '#8c564b',
+        'parameter': '#e377c2',
+        'processing': '#7f7f7f',
+        'general': '#bcbd22'
+    }
+    return color_map.get(category, '#bcbd22')
+
+# Alias for compatibility
+get_mpea_category_color = get_sib_category_color
+
+
+
+
+# ============================================================================
+# PYVIS RENDERER — colored edges + hierarchy labels
 # ============================================================================
 
-def render_pyvis_graph_v2(
+# Concept-type → node-color map for Pyvis
+_NODE_TYPE_COLORS = {
+    ConceptType.MATERIAL:       "#E74C3C",   # red
+    ConceptType.PROCESS:        "#3498DB",   # blue
+    ConceptType.PROPERTY:       "#2ECC71",   # green
+    ConceptType.PHENOMENON:     "#F39C12",   # orange
+    ConceptType.METHOD:         "#9B59B6",   # purple
+    ConceptType.PARAMETER:      "#1ABC9C",   # teal
+    ConceptType.MICROSTRUCTURE: "#E67E22",   # dark orange
+    ConceptType.MODEL:          "#2980B9",   # dark blue
+    ConceptType.GENERAL:        "#95A5A6",   # grey
+}
+
+
+def render_pyvis_graph(
     nx_graph, concept_abstract_map, physics_enabled=True,
     cmap_name="viridis", top_n_nodes=0, theme=None, physics_preset=None,
     show_edge_weights=False, edge_label_mode="hover",
@@ -1243,41 +3436,19 @@ def render_pyvis_graph_v2(
     edge_label_size=10, edge_label_color=None,
     edge_label_position="middle",
     use_abbreviated_labels=False, max_label_length=15,
-    enable_node_highlight=True, show_definitions=True, ontology=None,
-    # NEW: Edge customization parameters
-    edge_color_mode: str = "theme",
-    custom_edge_color: str = "#808080",
-    edge_lightness: float = 0.0,
-    edge_width_scale: float = 1.0,
-    edge_opacity: float = 0.85,
-    show_edge_legend: bool = True,
-    hierarchy_label_style: str = "arrow",
-    min_node_size: int = 8,
-    max_node_size: int = 40,
-    node_size_scale: float = 1.0,
+    enable_node_highlight=True, show_definitions=True, ontology=None
 ) -> None:
     """
-    Enhanced PyVis renderer with full edge customization and hierarchy labels.
-
-    NEW Features:
-    - edge_color_mode: "theme" | "uniform_grey" | "custom"
-    - custom_edge_color: hex color for custom mode
-    - edge_lightness: 0.0-1.0 lightness adjustment
-    - edge_width_scale: multiplier for edge widths
-    - edge_opacity: 0.0-1.0 opacity control
-    - show_edge_legend: toggle edge type legend
-    - hierarchy_label_style: "arrow" | "bracket" | "dot" | "leaf"
-    - min/max_node_size: bounds for node sizing
-    - node_size_scale: multiplier for node sizes
+    Faithful AgNPs/MPEA-pattern PyVis renderer:
+    - tempfile-based HTML generation (robust)
+    - Glassmorphism UI with edge info panel
+    - Label mode switching (short/full)
+    - Robust tooltip parsing
     """
     if theme is None:
         theme = THEME_PRESETS["Bright (Default)"]
     if physics_preset is None:
         physics_preset = PHYSICS_PRESETS["Stable (Default)"]
-
-    # Validate edge_color_mode
-    if edge_color_mode not in ["theme", "uniform_grey", "custom"]:
-        edge_color_mode = "theme"
 
     # Filter to top N nodes if requested
     if top_n_nodes > 0 and len(nx_graph.nodes()) > top_n_nodes:
@@ -1322,29 +3493,16 @@ def render_pyvis_graph_v2(
     n_counter = 1
     used_rel_types = {}
 
-    # --- NODE RENDERING ---
     for i, node in enumerate(nx_graph.nodes()):
         freq = len(concept_abstract_map.get(node, []))
-
-        # Size by frequency with bounds and scale
-        size = int(np.clip(
-            min_node_size + freq * 1.2 * node_size_scale,
-            min_node_size,
-            max_node_size
-        ))
-
-        # Color by category with colormap
+        size = int(np.clip(8 + freq * 1.2, 8, 40))
         color = get_sib_category_color(node, cmap_colors)
         degree = int(nx_graph.degree(node))
         original_label = node
 
-        # Hierarchy label logic
-        if node in _HIERARCHY_PARENTS:
-            label = get_hierarchy_label(node, style=hierarchy_label_style)
-        else:
-            label = node.replace("_", " ").title()
+        # Hierarchy label logic (SIB specific)
+        label = get_hierarchy_label(node, style="arrow") if node in _HIERARCHY_PARENTS else node
 
-        # Abbreviated labels
         if use_abbreviated_labels and len(original_label) > max_label_length:
             short_label = f"N{n_counter}"
             label_map[short_label] = original_label
@@ -1355,18 +3513,11 @@ def render_pyvis_graph_v2(
             font_dict = {'color': '#ffffff', 'size': inside_font_size, 'face': node_font_face, 'bold': True}
         else:
             node_shape = 'dot'
-            font_dict = {
-                'color': theme['font'], 
-                'size': node_label_size, 
-                'face': node_font_face, 
-                'strokeWidth': 0, 
-                'vadjust': -6
-            }
+            font_dict = {'color': theme['font'], 'size': node_label_size, 'face': node_font_face, 'strokeWidth': 0, 'vadjust': -6}
 
         concept_type = nx_graph.nodes[node].get('concept_type', 'general')
         definition = nx_graph.nodes[node].get('definition', '')
 
-        # Rich HTML tooltip
         tooltip_content = (
             f"<div style='font-family:{node_font_face};'>"
             f"<b style='font-size:14px;color:{theme['highlight_bg']};'>{node}</b><br>"
@@ -1381,30 +3532,15 @@ def render_pyvis_graph_v2(
         tooltip_content += "</div>"
 
         x, y = pos.get(node, (0, 0))[0] * 1200, pos.get(node, (0, 0))[1] * 1200
-        net.add_node(
-            node, label=label, size=size, x=x, y=y,
-            color={
-                'background': color, 
-                'border': theme['node_border'],
-                'highlight': {'background': theme['highlight_bg'], 'border': '#ffffff'},
-                'hover': {'background': theme['hover_bg'], 'border': '#ffffff'}
-            },
-            font=font_dict, 
-            title=tooltip_content, 
-            borderWidth=2, 
-            borderWidthSelected=3,
-            shadow={
-                'enabled': True, 
-                'color': theme['shadow_color'], 
-                'size': 12, 
-                'x': 4, 
-                'y': 4
-            },
-            shape=node_shape, 
-            mass=max(1, 1 + freq * 0.05)
-        )
+        net.add_node(node, label=label, size=size, x=x, y=y,
+                     color={'background': color, 'border': theme['node_border'],
+                            'highlight': {'background': theme['highlight_bg'], 'border': '#ffffff'},
+                            'hover': {'background': theme['hover_bg'], 'border': '#ffffff'}},
+                     font=font_dict, title=tooltip_content, borderWidth=2, borderWidthSelected=3,
+                     shadow={'enabled': True, 'color': theme['shadow_color'], 'size': 12, 'x': 4, 'y': 4},
+                     shape=node_shape, mass=max(1, 1 + freq * 0.05))
 
-    # --- EDGE RENDERING WITH FULL CUSTOMIZATION ---
+    # Edge rendering with RelationshipType coloring
     all_weights = [nx_graph[u][v].get('weight', 1) for u, v in nx_graph.edges()]
     weight_threshold = float(np.percentile(all_weights, 80)) if all_weights else 0.0
 
@@ -1413,123 +3549,45 @@ def render_pyvis_graph_v2(
         edge_type = nx_graph[u][v].get('edge_type', 'unknown')
         is_inferred = nx_graph[u][v].get('inferred', False)
 
-        # Resolve relationship type
         rel_type = RelationshipType.SEMANTIC
         if edge_type != 'unknown':
-            try:
-                rel_type = RelationshipType(edge_type)
-            except ValueError:
-                # Map common edge types to RelationshipType
-                type_mapping = {
-                    'cooccurrence': RelationshipType.CO_OCCURS,
-                    'semantic': RelationshipType.SEMANTIC,
-                    'bridge': RelationshipType.BRIDGE,
-                    'hypernym': RelationshipType.HYPERNYM,
-                    'hyponym': RelationshipType.HYPONYM,
-                    'inferred': RelationshipType.INFERRED,
-                    'manual': RelationshipType.SEMANTIC,
-                }
-                rel_type = type_mapping.get(edge_type, RelationshipType.SEMANTIC)
+            try: rel_type = RelationshipType(edge_type)
+            except ValueError: pass
 
-        # Apply edge color mode
-        if edge_color_mode == "theme":
-            base_color = get_edge_color(rel_type)
-            if edge_lightness > 0:
-                base_color = lighten_hex_color(base_color, edge_lightness)
-        elif edge_color_mode == "uniform_grey":
-            base_color = lighten_hex_color("#808080", edge_lightness)
-        else:  # custom
-            base_color = lighten_hex_color(custom_edge_color, edge_lightness)
-
-        # Width with scale
-        width = float(get_edge_width(rel_type) * edge_width_scale * (0.5 + 0.5 * w))
-
-        # Style
+        base_color = get_edge_color(rel_type)
+        width = float(get_edge_width(rel_type) * (0.5 + 0.5 * w))
         style = get_edge_style(rel_type)
         dashes = True if style == "dashed" or is_inferred else False
 
         edge_kwargs = dict(
-            value=float(np.clip(w, 0.5, 5)), 
-            width=width,
-            color={
-                'color': base_color, 
-                'highlight': theme['highlight_bg'], 
-                'hover': theme['hover_bg'], 
-                'opacity': edge_opacity
-            },
+            value=float(np.clip(w, 0.5, 5)), width=width,
+            color={'color': base_color, 'highlight': theme['highlight_bg'], 'hover': theme['hover_bg'], 'opacity': 0.85},
             smooth={"type": "dynamic"},
-            title=(
-                f"<span style='font-family:{node_font_face};'>"
-                f"Weight: <b>{w:.2f}</b><br>"
-                f"Type: {edge_type}<br>"
-                f"Inferred: {is_inferred}<br>"
-                f"Relationship: {rel_type.value}"
-                f"</span>"
-            ),
+            title=f"<span style='font-family:{node_font_face};'>Weight: <b>{w:.2f}</b><br>Type: {edge_type}<br>Inferred: {is_inferred}</span>",
             dashes=dashes
         )
 
-        # Edge labels
         if edge_label_mode == "all" or (edge_label_mode == "threshold" and w >= weight_threshold):
             edge_kwargs['label'] = f"{w:.1f}"
-            edge_kwargs['font'] = {
-                'color': edge_label_color or theme['font'], 
-                'size': int(edge_label_size),
-                'background': theme['tooltip_bg'], 
-                'strokeWidth': 2, 
-                'strokeColor': theme['node_border'],
-                'align': edge_label_position, 
-                'face': node_font_face
-            }
-
+            edge_kwargs['font'] = {'color': edge_label_color or theme['font'], 'size': int(edge_label_size),
+                                   'background': theme['tooltip_bg'], 'strokeWidth': 2, 'strokeColor': theme['node_border'],
+                                   'align': edge_label_position, 'face': node_font_face}
         net.add_edge(u, v, **edge_kwargs)
 
         if rel_type not in used_rel_types:
             used_rel_types[rel_type] = rel_type.value.replace("_", " ").title()
 
-    # --- Edge-color legend (HTML injected via hidden node) ---
-    if show_edge_legend and used_rel_types:
+    # --- Edge-color legend (HTML injected via footer) ---
+    if used_rel_types:
         legend_rows = []
         for rt, human in sorted(used_rel_types.items(), key=lambda x: x[1]):
             c = get_edge_color(rt)
-            if edge_color_mode == "uniform_grey":
-                c = lighten_hex_color("#808080", edge_lightness)
-            elif edge_color_mode == "custom":
-                c = lighten_hex_color(custom_edge_color, edge_lightness)
-
-            w_leg = get_edge_width(rt) * edge_width_scale
+            w_leg = get_edge_width(rt)
             s_leg = get_edge_style(rt)
             border = 'border: 1px dashed #888;' if s_leg == "dashed" else 'border: 1px solid transparent;'
-            legend_rows.append(
-                f'<tr><td style="padding:2px 6px;">'
-                f'<span style="display:inline-block;width:{int(20*w_leg)}px;'
-                f'height:3px;background:{c};vertical-align:middle;{border}">'
-                f'</span></td>'
-                f'<td style="padding:2px 6px;color:#ccc;font-size:11px;">'
-                f'{human}</td></tr>'
-            )
-
-        # Show current color mode in legend header
-        mode_label = {
-            "theme": "Relationship-Type Colors",
-            "uniform_grey": "Uniform Grey",
-            "custom": f"Custom ({custom_edge_color})"
-        }.get(edge_color_mode, "Edge Colors")
-
-        legend_html = (
-            f'<div style="background:#0d0d1a;border-radius:8px;'
-            f'padding:12px 16px;margin-top:8px;max-height:280px;'
-            f'overflow-y:auto;">'
-            f'<div style="color:#fff;font-size:13px;font-weight:bold;'
-            f'margin-bottom:6px;">{mode_label} ({len(used_rel_types)} types)</div>'
-            f'<table style="border-collapse:collapse;">'
-            f'{"".join(legend_rows)}</table></div>'
-        )
-        net.add_node(
-            "__legend__", label="", shape="dot", size=0, 
-            color="rgba(0,0,0,0)", fixed=True, x=-500, y=-500, 
-            physics=False, title=legend_html
-        )
+            legend_rows.append(f'<tr><td style="padding:2px 6px;"><span style="display:inline-block;width:{int(20*w_leg)}px;height:3px;background:{c};vertical-align:middle;{border}"></span></td><td style="padding:2px 6px;color:#ccc;font-size:11px;">{human}</td></tr>')
+        legend_html = f'<div style="background:#0d0d1a;border-radius:8px;padding:12px 16px;margin-top:8px;max-height:280px;overflow-y:auto;"><div style="color:#fff;font-size:13px;font-weight:bold;margin-bottom:6px;">Edge Colors ({len(used_rel_types)} types)</div><table style="border-collapse:collapse;">{"".join(legend_rows)}</table></div>'
+        net.add_node("__legend__", label="", shape="dot", size=0, color="rgba(0,0,0,0)", fixed=True, x=-500, y=-500, physics=False, title=legend_html)
 
     # Generate HTML safely via tempfile
     try:
@@ -1541,10 +3599,7 @@ def render_pyvis_graph_v2(
             html_content = f.read()
         if use_abbreviated_labels and label_map:
             label_map_json = json.dumps(label_map)
-            html_content = html_content.replace(
-                '</body>', 
-                f'<div id="hea-label-map-data" style="display:none;">{label_map_json}</div></body>'
-            )
+            html_content = html_content.replace('</body>', f'<div id="hea-label-map-data" style="display:none;">{label_map_json}</div></body>')
         os.unlink(tmp_path)
     except Exception as e:
         st.error(f"PyVis HTML generation failed: {e}")
@@ -1556,17 +3611,11 @@ def render_pyvis_graph_v2(
     body {{ background: {theme['bg']}; margin: 0; padding: 0; font-family: '{node_font_face}', sans-serif; }}
     #mynetwork {{ border-radius: 16px; box-shadow: 0 12px 48px {theme['shadow_color']}; outline: none; }}
     div.vis-tooltip {{
-        background: {theme['tooltip_bg']} !important; 
-        color: {theme['tooltip_text']} !important;
-        border: 1px solid {theme['tooltip_border']} !important; 
-        border-radius: 10px !important;
-        padding: 14px 18px !important; 
-        font-family: '{node_font_face}', sans-serif !important;
-        font-size: 13px !important; 
-        line-height: 1.5 !important;
-        box-shadow: 0 8px 32px {theme['shadow_color']} !important; 
-        max-width: 320px !important; 
-        white-space: normal !important;
+        background: {theme['tooltip_bg']} !important; color: {theme['tooltip_text']} !important;
+        border: 1px solid {theme['tooltip_border']} !important; border-radius: 10px !important;
+        padding: 14px 18px !important; font-family: '{node_font_face}', sans-serif !important;
+        font-size: 13px !important; line-height: 1.5 !important;
+        box-shadow: 0 8px 32px {theme['shadow_color']} !important; max-width: 320px !important; white-space: normal !important;
     }}
     </style>
     """
@@ -1586,39 +3635,28 @@ def render_pyvis_graph_v2(
                     var activeNodeId = null;
                     var labelMode = 'short';
                     var labelMap = {};
-
                     (function initLabelMap() {
                         var hidden = document.getElementById('hea-label-map-data');
-                        if (hidden && hidden.textContent) { 
-                            try { labelMap = JSON.parse(hidden.textContent); } catch(e) {} 
-                        }
+                        if (hidden && hidden.textContent) { try { labelMap = JSON.parse(hidden.textContent); } catch(e) {} }
                     })();
-
                     function resetAll() {
                         var nodeRestores = [];
-                        for (var nid in savedNodeColors) { 
-                            nodeRestores.push({id: nid, color: savedNodeColors[nid]}); 
-                        }
+                        for (var nid in savedNodeColors) { nodeRestores.push({id: nid, color: savedNodeColors[nid]}); }
                         if (nodeRestores.length > 0) nodesDS.update(nodeRestores);
-                        savedNodeColors = {}; 
-                        activeNodeId = null;
-                        var panel = document.getElementById('edge-info-panel'); 
-                        if (panel) panel.style.display = 'none';
+                        savedNodeColors = {}; activeNodeId = null;
+                        var panel = document.getElementById('edge-info-panel'); if (panel) panel.style.display = 'none';
                     }
-
                     function resolveFullName(shortOrId) {
                         if (labelMap && labelMap[shortOrId]) return labelMap[shortOrId];
                         var n = nodesDS.get(shortOrId);
                         if (n && n.title) {
-                            var tmp = document.createElement('div'); 
-                            tmp.innerHTML = n.title;
+                            var tmp = document.createElement('div'); tmp.innerHTML = n.title;
                             var txt = (tmp.textContent || tmp.innerText || '').trim();
-                            var firstLine = txt.split('\n')[0];
+                            var firstLine = txt.split('\\n')[0];
                             if (firstLine) return firstLine.replace(/<[^>]*>/g,'').trim();
                         }
                         return shortOrId;
                     }
-
                     function formatEdgeRow(e, idx, mode) {
                         var typeColor = e.inferred ? '#8b5cf6' : '#0ea5e9';
                         var badge = e.inferred ? ' <span style="background:#8b5cf6;color:white;padding:1px 4px;border-radius:3px;font-size:9px;">INFERRED</span>' : '';
@@ -1634,41 +3672,23 @@ def render_pyvis_graph_v2(
                         '<span style="background:#0ea5e9;color:white;font-size:10px;padding:2px 6px;border-radius:4px;font-weight:700;">W: ' + e.weight + '</span>' +
                         typeBadge + badge + '</div></div>';
                     }
-
                     function showEdgeInfoPanel(nodeId, connectedEdges) {
                         var panel = document.getElementById('edge-info-panel');
-                        if (!panel) { 
-                            panel = document.createElement('div'); 
-                            panel.id = 'edge-info-panel'; 
-                            document.body.appendChild(panel); 
-                        }
+                        if (!panel) { panel = document.createElement('div'); panel.id = 'edge-info-panel'; document.body.appendChild(panel); }
                         panel.style.cssText = 'position:fixed;top:90px;right:20px;width:400px;max-height:calc(100vh - 110px);overflow-y:auto;z-index:9999;' +
                         'background:rgba(255,255,255,0.95);border:1px solid rgba(255,215,0,0.6);border-radius:16px;padding:0;' +
                         'font-family:Inter,Segoe UI,Roboto,sans-serif;box-shadow:0 20px 60px rgba(0,0,0,0.15);backdrop-filter:blur(20px);';
-
                         var nodeData = nodesDS.get(nodeId);
-                        var nodeName = nodeId; 
-                        var nodeDefinition = ""; 
-                        var nodeType = ""; 
-                        var nodeFreq = ""; 
-                        var nodeDegree = "";
-
+                        var nodeName = nodeId; var nodeDefinition = ""; var nodeType = ""; var nodeFreq = ""; var nodeDegree = "";
                         if (nodeData && nodeData.title) {
-                            var tmpDiv = document.createElement("div"); 
-                            tmpDiv.innerHTML = nodeData.title;
+                            var tmpDiv = document.createElement("div"); tmpDiv.innerHTML = nodeData.title;
                             var tooltipText = tmpDiv.textContent || tmpDiv.innerText || "";
-                            var defMatch = tooltipText.match(/Definition:\s*(.+)/i); 
-                            if (defMatch && defMatch[1]) { nodeDefinition = defMatch[1].trim(); }
-                            var typeMatch = tooltipText.match(/Type:\s*(\w+)/i); 
-                            if (typeMatch && typeMatch[1]) { nodeType = typeMatch[1].trim(); }
-                            var freqMatch = tooltipText.match(/Frequency:\s*(\d+)/i); 
-                            if (freqMatch && freqMatch[1]) { nodeFreq = freqMatch[1].trim(); }
-                            var degMatch = tooltipText.match(/Degree:\s*(\d+)/i); 
-                            if (degMatch && degMatch[1]) { nodeDegree = degMatch[1].trim(); }
-                            var nameMatch = tooltipText.match(/^([^\n]+)/); 
-                            if (nameMatch) nodeName = nameMatch[1].replace(/<[^>]*>/g,'').trim();
+                            var defMatch = tooltipText.match(/Definition:\\s*(.+)/i); if (defMatch && defMatch[1]) { nodeDefinition = defMatch[1].trim(); }
+                            var typeMatch = tooltipText.match(/Type:\\s*(\\w+)/i); if (typeMatch && typeMatch[1]) { nodeType = typeMatch[1].trim(); }
+                            var freqMatch = tooltipText.match(/Frequency:\\s*(\\d+)/i); if (freqMatch && freqMatch[1]) { nodeFreq = freqMatch[1].trim(); }
+                            var degMatch = tooltipText.match(/Degree:\\s*(\\d+)/i); if (degMatch && degMatch[1]) { nodeDegree = degMatch[1].trim(); }
+                            var nameMatch = tooltipText.match(/^([^\\n]+)/); if (nameMatch) nodeName = nameMatch[1].replace(/<[^>]*>/g,'').trim();
                         }
-
                         var html = '<div style="padding:16px 20px;background:linear-gradient(135deg,rgba(255,215,0,0.15),rgba(255,183,77,0.1));border-radius:16px 16px 0 0;border-bottom:2px solid rgba(255,215,0,0.4);">';
                         html += '<div style="font-size:18px;font-weight:800;color:#1e293b;margin-bottom:8px;">🔋 ' + nodeName + '</div>';
                         html += '<div style="display:flex;flex-wrap:wrap;gap:6px;">';
@@ -1676,80 +3696,47 @@ def render_pyvis_graph_v2(
                         if (nodeDegree) html += '<span style="background:rgba(168,85,247,0.1);color:#a855f7;font-size:10px;padding:3px 8px;border-radius:10px;font-weight:600;">Deg: ' + nodeDegree + '</span>';
                         if (nodeFreq) html += '<span style="background:rgba(34,197,94,0.1);color:#22c55e;font-size:10px;padding:3px 8px;border-radius:10px;font-weight:600;">Freq: ' + nodeFreq + '</span>';
                         html += '</div></div>';
-
                         if (nodeDefinition) {
                             html += '<div style="padding:12px 20px;background:rgba(251,191,36,0.06);border-bottom:1px solid rgba(0,0,0,0.04);">';
                             html += '<div style="font-size:10px;color:#94a3b8;font-weight:600;text-transform:uppercase;margin-bottom:4px;">📖 Definition</div>';
                             html += '<div style="font-size:12px;color:#475569;font-style:italic;line-height:1.4;">' + nodeDefinition + '</div></div>';
                         }
-
                         html += '<div style="padding:10px 20px;background:rgba(248,250,252,0.8);border-bottom:1px solid rgba(0,0,0,0.04);display:flex;align-items:center;gap:10px;">';
                         html += '<span style="font-size:10px;color:#94a3b8;font-weight:600;">Label Mode</span>';
-                        html += '<button id="btn-short" onclick="window._heaSetLabelMode(\'short\')" style="padding:4px 10px;border:none;border-radius:6px;font-size:10px;font-weight:700;cursor:pointer;background:#D32F2F;color:white;">Short</button>';
-                        html += '<button id="btn-full" onclick="window._heaSetLabelMode(\'full\')" style="padding:4px 10px;border:none;border-radius:6px;font-size:10px;font-weight:700;cursor:pointer;background:transparent;color:#64748b;">Full</button>';
+                        html += '<button id="btn-short" onclick="window._heaSetLabelMode(\\'short\\')" style="padding:4px 10px;border:none;border-radius:6px;font-size:10px;font-weight:700;cursor:pointer;background:#D32F2F;color:white;">Short</button>';
+                        html += '<button id="btn-full" onclick="window._heaSetLabelMode(\\'full\\')" style="padding:4px 10px;border:none;border-radius:6px;font-size:10px;font-weight:700;cursor:pointer;background:transparent;color:#64748b;">Full</button>';
                         html += '</div>';
-
                         html += '<div id="edges-container" style="padding:12px 16px 16px;">';
                         var edgeList = [];
                         connectedEdges.forEach(function(eId) {
-                            var e = edgesDS.get(eId); 
-                            if (!e) return;
-                            var fromNode = nodesDS.get(e.from); 
-                            var toNode = nodesDS.get(e.to);
+                            var e = edgesDS.get(eId); if (!e) return;
+                            var fromNode = nodesDS.get(e.from); var toNode = nodesDS.get(e.to);
                             var fromLabel = fromNode ? (fromNode.label || e.from) : e.from;
                             var toLabel = toNode ? (toNode.label || e.to) : e.to;
                             var w = (typeof e.value === 'number') ? e.value : (e.width || 1);
                             var edgeType = 'unknown', isInferred = false;
                             if (e.title) {
-                                var tmpDiv = document.createElement('div'); 
-                                tmpDiv.innerHTML = e.title;
+                                var tmpDiv = document.createElement('div'); tmpDiv.innerHTML = e.title;
                                 var _txt = tmpDiv.textContent || tmpDiv.innerText || '';
-                                var m = _txt.match(/Type:\s*(\w+)/); 
-                                if (m) edgeType = m[1];
+                                var m = _txt.match(/Type:\\s*(\\w+)/); if (m) edgeType = m[1];
                                 if (_txt.indexOf('Inferred: true') !== -1) isInferred = true;
                             }
-                            edgeList.push({
-                                from: fromLabel, 
-                                to: toLabel, 
-                                weight: (typeof w === 'number') ? w.toFixed(2) : String(w), 
-                                type: edgeType, 
-                                inferred: isInferred
-                            });
+                            edgeList.push({from: fromLabel, to: toLabel, weight: (typeof w === 'number') ? w.toFixed(2) : String(w), type: edgeType, inferred: isInferred});
                         });
                         edgeList.sort(function(a,b){ return parseFloat(b.weight)-parseFloat(a.weight); });
                         edgeList.forEach(function(e, idx){ html += formatEdgeRow(e, idx, labelMode); });
                         html += '</div>';
-
-                        panel.innerHTML = html; 
-                        panel.style.display = 'block'; 
-                        panel._edgeList = edgeList;
-
+                        panel.innerHTML = html; panel.style.display = 'block'; panel._edgeList = edgeList;
                         window._heaSetLabelMode = function(mode) {
-                            labelMode = mode; 
-                            var p = document.getElementById('edge-info-panel');
+                            labelMode = mode; var p = document.getElementById('edge-info-panel');
                             if (!p || !p._edgeList) return;
-                            var btnShort = document.getElementById('btn-short'); 
-                            var btnFull = document.getElementById('btn-full');
-                            if (mode === 'short') { 
-                                btnShort.style.background = '#D32F2F'; 
-                                btnShort.style.color = 'white'; 
-                                btnFull.style.background = 'transparent'; 
-                                btnFull.style.color = '#64748b'; 
-                            } else { 
-                                btnFull.style.background = '#D32F2F'; 
-                                btnFull.style.color = 'white'; 
-                                btnShort.style.background = 'transparent'; 
-                                btnShort.style.color = '#64748b'; 
-                            }
+                            var btnShort = document.getElementById('btn-short'); var btnFull = document.getElementById('btn-full');
+                            if (mode === 'short') { btnShort.style.background = '#D32F2F'; btnShort.style.color = 'white'; btnFull.style.background = 'transparent'; btnFull.style.color = '#64748b'; }
+                            else { btnFull.style.background = '#D32F2F'; btnFull.style.color = 'white'; btnShort.style.background = 'transparent'; btnShort.style.color = '#64748b'; }
                             var container = document.getElementById('edges-container');
-                            if (container) { 
-                                var newHtml = ''; 
-                                p._edgeList.forEach(function(e, idx){ newHtml += formatEdgeRow(e, idx, mode); }); 
-                                container.innerHTML = newHtml; 
-                            }
+                            if (container) { var newHtml = ''; p._edgeList.forEach(function(e, idx){ newHtml += formatEdgeRow(e, idx, mode); }); container.innerHTML = newHtml; }
                         };
                     }
-
                     network.on("selectNode", function(params) {
                         var nodeId = params.nodes[0];
                         if (activeNodeId !== null && activeNodeId !== nodeId) resetAll();
@@ -1762,23 +3749,15 @@ def render_pyvis_graph_v2(
                             if (n && !savedNodeColors[nId]) {
                                 savedNodeColors[nId] = JSON.parse(JSON.stringify(n.color));
                                 var newColor = JSON.parse(JSON.stringify(n.color));
-                                if (typeof newColor === 'string') newColor = {background: newColor, border: '#FFD700'}; 
-                                else newColor.border = '#FFD700';
-                                nodeUpdates.push({
-                                    id: nId, 
-                                    color: newColor, 
-                                    shadow: {enabled: true, color: 'rgba(255,215,0,0.5)', size: 15, x: 0, y: 0}
-                                });
+                                if (typeof newColor === 'string') newColor = {background: newColor, border: '#FFD700'}; else newColor.border = '#FFD700';
+                                nodeUpdates.push({id: nId, color: newColor, shadow: {enabled: true, color: 'rgba(255,215,0,0.5)', size: 15, x: 0, y: 0}});
                             }
                         });
                         if (nodeUpdates.length > 0) nodesDS.update(nodeUpdates);
                         showEdgeInfoPanel(nodeId, connectedEdges);
                     });
-
                     network.on("deselectNode", function(){ resetAll(); });
-                    network.on("click", function(params){ 
-                        if (params.nodes.length === 0 && activeNodeId !== null) resetAll(); 
-                    });
+                    network.on("click", function(params){ if (params.nodes.length === 0 && activeNodeId !== null) resetAll(); });
                 }
             }, 250);
         })();
@@ -1788,7 +3767,6 @@ def render_pyvis_graph_v2(
 
     st.components.v1.html(html_content, height=790, scrolling=True)
 
-    # Show abbreviated label legend
     if use_abbreviated_labels and label_map:
         st.markdown("---")
         st.markdown("### 🗺️ Node Label Legend")
@@ -1799,58 +3777,381 @@ def render_pyvis_graph_v2(
                 st.markdown(f"""<div style='padding:8px; border-radius:6px; background-color:{theme.get('tooltip_bg', '#f8fafc')}; border-left:4px solid {theme.get('highlight_bg', '#ff6b6b')}; margin-bottom:6px;'>
                 <b style='color:{theme.get('highlight_bg', '#ff6b6b')}; font-size:14px;'>{short}</b>: <span style='font-size:13px; color:{theme.get('font', '#1e293b')};'>{full}</span></div>""", unsafe_allow_html=True)
 
+def render_graph_plotly_2d(
+    nx_graph, concept_abstract_map, cmap_name="viridis",
+    custom_labels=None, top_n_nodes=0, node_label_size=10,
+    theme=None, show_edge_weights=False,
+) -> None:
+    if theme is None:
+        theme = THEME_PRESETS["Bright (Default)"]
+    if top_n_nodes > 0 and len(nx_graph.nodes()) > top_n_nodes:
+        degrees = dict(nx_graph.degree())
+        top_nodes = sorted(
+            degrees.keys(), key=lambda x: degrees[x], reverse=True
+        )[:top_n_nodes]
+        nx_graph = nx_graph.subgraph(top_nodes).copy()
+    pos = nx.spring_layout(nx_graph, k=1.5, iterations=50, seed=42)
+    cmap_colors = get_colormap_colors(cmap_name, len(nx_graph.nodes()))
+    edge_x: List[Optional[float]] = []
+    edge_y: List[Optional[float]] = []
+    edge_hover: List[Optional[str]] = []
+    for u, v in nx_graph.edges():
+        x0, y0 = pos[u]
+        x1, y1 = pos[v]
+        edge_x.extend([x0, x1, None])
+        edge_y.extend([y0, y1, None])
+        w = nx_graph[u][v].get('weight', 1)
+        edge_type = nx_graph[u][v].get('edge_type', 'unknown')
+        is_inferred = nx_graph[u][v].get('inferred', False)
+        edge_hover.extend([
+            (
+                f"<b>{u} + {v}</b><br>"
+                f"Weight: {w:.2f}<br>"
+                f"Type: {edge_type}<br>"
+                f"Inferred: {is_inferred}"
+            )
+        ] * 2 + [None])
+    edge_trace = go.Scatter(
+        x=edge_x, y=edge_y, mode='lines',
+        line=dict(width=1, color=theme['edge_unknown']),
+        hoverinfo='text', hovertext=edge_hover, name='Connections',
+    )
+    node_x: List[float] = []
+    node_y: List[float] = []
+    node_text: List[str] = []
+    node_size: List[int] = []
+    node_color: List[str] = []
+    node_labels: List[str] = []
+    for i, node in enumerate(nx_graph.nodes()):
+        x, y = pos[node]
+        node_x.append(x)
+        node_y.append(y)
+        deg = nx_graph.degree(node)
+        freq = len(concept_abstract_map.get(node, []))
+        concept_type = nx_graph.nodes[node].get('concept_type', 'general')
+        node_text.append(
+            f"{node}<br>Type: {concept_type}<br>"
+            f"Degree: {deg}<br>Frequency: {freq}"
+        )
+        node_size.append(max(8, min(35, deg * 2.5 + 10)))
+        node_color.append(cmap_colors[i])
+        node_labels.append(
+            custom_labels.get(node, node) if custom_labels else node
+        )
+    node_trace = go.Scatter(
+        x=node_x, y=node_y, mode='markers+text',
+        marker=dict(
+            size=node_size, color=node_color,
+            line=dict(width=2, color=theme['node_border']),
+        ),
+        text=node_labels, textposition="bottom center",
+        textfont=dict(size=node_label_size, color=theme['font']),
+        hovertext=node_text, hoverinfo='text', name='Concepts',
+    )
+    fig_data = [edge_trace, node_trace]
+    if show_edge_weights:
+        for u, v in nx_graph.edges():
+            x0, y0 = pos[u]
+            x1, y1 = pos[v]
+            w = nx_graph[u][v].get('weight', 1)
+            mid_x, mid_y = (x0 + x1) / 2, (y0 + y1) / 2
+            fig_data.append(go.Scatter(
+                x=[mid_x], y=[mid_y], mode='text',
+                text=[f"{w:.1f}"],
+                textfont=dict(size=8, color=theme['font']),
+                hoverinfo='skip', showlegend=False,
+            ))
+    fig = go.Figure(
+        data=fig_data,
+        layout=go.Layout(
+            showlegend=False, hovermode='closest',
+            margin=dict(b=0, l=0, r=0, t=0),
+            plot_bgcolor=theme['plotly_bg'],
+            paper_bgcolor=theme['plotly_paper'],
+            font=dict(color=theme['font']),
+            xaxis=dict(
+                showgrid=True, gridcolor=theme['grid_color'],
+                zeroline=False, showticklabels=False,
+                linecolor=theme['axis_color'],
+            ),
+            yaxis=dict(
+                showgrid=True, gridcolor=theme['grid_color'],
+                zeroline=False, showticklabels=False,
+                linecolor=theme['axis_color'],
+            ),
+        ),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def render_graph_plotly_3d(
+    nx_graph, concept_abstract_map, cmap_name="viridis",
+    top_n_nodes=0, theme=None, show_edge_weights=False,
+) -> None:
+    if theme is None:
+        theme = THEME_PRESETS["Bright (Default)"]
+    if len(nx_graph.nodes()) < 3:
+        st.info("3D view requires >=3 nodes.")
+        return
+    if top_n_nodes > 0 and len(nx_graph.nodes()) > top_n_nodes:
+        degrees = dict(nx_graph.degree())
+        top_nodes = sorted(
+            degrees.keys(), key=lambda x: degrees[x], reverse=True
+        )[:top_n_nodes]
+        nx_graph = nx_graph.subgraph(top_nodes).copy()
+    pos_3d = nx.spring_layout(nx_graph, dim=3, seed=42)
+    cmap_colors = get_colormap_colors(cmap_name, len(nx_graph.nodes()))
+    edge_x: List[Optional[float]] = []
+    edge_y: List[Optional[float]] = []
+    edge_z: List[Optional[float]] = []
+    for u, v in nx_graph.edges():
+        x0, y0, z0 = pos_3d[u]
+        x1, y1, z1 = pos_3d[v]
+        edge_x.extend([x0, x1, None])
+        edge_y.extend([y0, y1, None])
+        edge_z.extend([z0, z1, None])
+    edge_trace = go.Scatter3d(
+        x=edge_x, y=edge_y, z=edge_z, mode='lines',
+        line=dict(width=2, color=theme['edge_unknown']),
+        hoverinfo='skip',
+    )
+    node_x: List[float] = []
+    node_y: List[float] = []
+    node_z: List[float] = []
+    node_text: List[str] = []
+    node_size: List[int] = []
+    node_color: List[str] = []
+    node_labels: List[str] = []
+    for i, node in enumerate(nx_graph.nodes()):
+        x, y, z = pos_3d[node]
+        node_x.append(x)
+        node_y.append(y)
+        node_z.append(z)
+        deg = nx_graph.degree(node)
+        freq = len(concept_abstract_map.get(node, []))
+        concept_type = nx_graph.nodes[node].get('concept_type', 'general')
+        node_text.append(
+            f"{node}<br>Type: {concept_type}<br>"
+            f"Degree: {deg}<br>Frequency: {freq}"
+        )
+        node_size.append(max(6, min(25, deg * 2 + 8)))
+        node_color.append(cmap_colors[i])
+        node_labels.append(node)
+    node_trace = go.Scatter3d(
+        x=node_x, y=node_y, z=node_z, mode='markers+text',
+        marker=dict(size=node_size, color=node_color, opacity=0.9),
+        text=node_labels, textposition="top center",
+        textfont=dict(size=8, color=theme['font']),
+        hovertext=node_text, hoverinfo='text',
+    )
+    fig_data = [edge_trace, node_trace]
+    if show_edge_weights:
+        for u, v in nx_graph.edges():
+            x0, y0, z0 = pos_3d[u]
+            x1, y1, z1 = pos_3d[v]
+            w = nx_graph[u][v].get('weight', 1)
+            mid_x = (x0 + x1) / 2
+            mid_y = (y0 + y1) / 2
+            mid_z = (z0 + z1) / 2
+            fig_data.append(go.Scatter3d(
+                x=[mid_x], y=[mid_y], z=[mid_z], mode='text',
+                text=[f"{w:.1f}"],
+                textfont=dict(size=7, color=theme['font']),
+                hoverinfo='skip', showlegend=False,
+            ))
+    fig = go.Figure(
+        data=fig_data,
+        layout=go.Layout(
+            scene=dict(
+                xaxis=dict(
+                    showbackground=False,
+                    gridcolor=theme['grid_color'],
+                    linecolor=theme['axis_color'],
+                ),
+                yaxis=dict(
+                    showbackground=False,
+                    gridcolor=theme['grid_color'],
+                    linecolor=theme['axis_color'],
+                ),
+                zaxis=dict(
+                    showbackground=False,
+                    gridcolor=theme['grid_color'],
+                    linecolor=theme['axis_color'],
+                ),
+            ),
+            margin=dict(l=0, r=0, b=0, t=0),
+            showlegend=False,
+            paper_bgcolor=theme['plotly_paper'],
+        ),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def render_graph_fallback(
+    nx_graph, concept_abstract_map, theme=None, show_edge_weights=False,
+) -> None:
+    if theme is None:
+        theme = THEME_PRESETS["Bright (Default)"]
+    st.markdown(f"### Graph Summary (Text View)")
+    st.markdown(f"- **Nodes**: {len(nx_graph.nodes())}")
+    st.markdown(f"- **Edges**: {len(nx_graph.edges())}")
+    if len(nx_graph.edges()) > 0:
+        edge_list = [
+            (
+                u, v,
+                nx_graph[u][v].get('weight', 1),
+                nx_graph[u][v].get('edge_type', 'unknown'),
+                nx_graph[u][v].get('inferred', False),
+            )
+            for u, v in nx_graph.edges()
+        ]
+        edge_list.sort(key=lambda x: x[2], reverse=True)
+        st.markdown("**Top 20 Strongest Connections:**")
+        for i, (u, v, w, etype, inferred) in enumerate(edge_list[:20], 1):
+            inferred_badge = (
+                "<span style='background:#8b5cf6;color:white;"
+                "padding:1px 5px;border-radius:4px;font-size:11px;'>"
+                "INFERRED</span>"
+                if inferred else ""
+            )
+            st.markdown(
+                f"{i}. `{u}` + `{v}` {inferred_badge} "
+                f"(weight: {w:.2f}, type: {etype})",
+                unsafe_allow_html=True,
+            )
+    if len(concept_abstract_map) > 0:
+        freq_data = [
+            (c, len(concept_abstract_map.get(c, [])))
+            for c in nx_graph.nodes()
+        ]
+        freq_data.sort(key=lambda x: x[1], reverse=True)
+        st.markdown("**Top Concepts by Frequency:**")
+        st.dataframe(
+            pd.DataFrame(
+                freq_data[:15], columns=["Concept", "Abstract Count"]
+            ),
+            use_container_width=True,
+        )
+
 
 # ============================================================================
-# IMPROVED SUNBURST RENDERER
+# SUNBURST & RADAR CHARTS (AgNPs Pattern — Duplicate Prevention)
 # ============================================================================
 
-def render_sunburst_chart_v2(
+
+# ============================================================================
+# PLOTLY SUNBURST — full hierarchy labels
+# ============================================================================
+
+# Category → color map (tier-1 colors for the sunburst segments)
+_SUNBURST_CATEGORY_COLORS = {
+    "Cathode Materials":          "#E74C3C",
+    "Anode Materials":            "#E67E22",
+    "Electrolytes":               "#2ECC71",
+    "Electrochemical Properties": "#F1C40F",
+    "Phenomena":                  "#3498DB",
+    "Characterization Methods":   "#9B59B6",
+    "Parameters":                 "#1ABC9C",
+    "Processing":                 "#2980B9",
+}
+
+
+def build_category_hierarchy(
+    valid_concepts: List[str],
+    concept_abstract_map: Dict,
+    top_n_per_category: int = 40,
+) -> Tuple[List, List, List]:
+    """
+    Faithful AgNPs/MPEA pattern: 2-level hierarchy with DUPLICATE PREVENTION.
+    - Root (center): "Sodium-Ion Battery"
+    - Ring 1: Categories
+    - Ring 2: Concepts (NEVER repeating category names)
+    """
+    category_map = abstract_concepts_to_categories(valid_concepts)
+    all_category_names = set(category_map.values())
+
+    hierarchy: Dict[str, Dict] = {}
+    for cat in all_category_names:
+        hierarchy[cat] = {"children": [], "count": 0}
+
+    for concept in valid_concepts:
+        category = category_map.get(concept, 'general')
+        freq = len(concept_abstract_map.get(concept, []))
+
+        # ★ KEY FIX: Skip if the concept IS a category name
+        if concept in all_category_names:
+            hierarchy.setdefault(category, {"children": [], "count": 0})
+            hierarchy[category]["count"] += freq
+            continue
+
+        hierarchy.setdefault(category, {"children": [], "count": 0})
+        hierarchy[category]["children"].append((concept, freq))
+        hierarchy[category]["count"] += freq
+
+    labels: List[str] = []
+    parents: List[str] = []
+    values: List[int] = []
+
+    root_label = "Sodium-Ion Battery"
+    total = sum(h["count"] for h in hierarchy.values())
+    labels.append(root_label)
+    parents.append("")
+    values.append(total)
+
+    for category, data in hierarchy.items():
+        children = data["children"]
+        children.sort(key=lambda x: x[1], reverse=True)
+
+        if top_n_per_category > 0 and len(children) > top_n_per_category:
+            children = children[:top_n_per_category]
+
+        cat_child_sum = sum(freq for _, freq in children)
+        labels.append(category)
+        parents.append(root_label)
+        values.append(cat_child_sum if cat_child_sum > 0 else data["count"])
+
+        for concept, freq in children:
+            # ★ SAFETY: Never add a concept that duplicates any category name
+            if concept in all_category_names:
+                continue
+            labels.append(concept)
+            parents.append(category)
+            values.append(max(freq, 1))
+
+    return labels, parents, values
+
+
+def render_sunburst_chart(
     graph: nx.Graph,
-    concept_abstract_map: Optional[Dict[str, List[int]]] = None,
     node_weights: Optional[Dict[str, float]] = None,
     min_weight: float = 0.0,
     colormap_name: str = "viridis",
-    # NEW customization parameters
-    width: int = 900,
-    height: int = 700,
-    show_labels: bool = True,
-    show_values: bool = False,
-    hover_info: str = "all",
-    branchvalues: str = "total",
-    font_family: str = "Arial, sans-serif",
-    label_size: int = 20,
-    legend_font_size: int = 12,
-    use_symbols: bool = False,
-    show_symbol_legend: bool = True,
-    top_n_per_category: int = 0,
-    category_filter: Optional[List[str]] = None,
-    theme_bg: str = "#1a1a2e",
-    title: str = "Sodium-Ion Battery Concept Hierarchy",
 ) -> go.Figure:
     """
-    Enhanced Plotly sunburst chart with full customization.
+    Render a Plotly sunburst chart with 3-level hierarchy:
+        Root → Category → Concept (leaf)
 
-    NEW Features:
-    - Symbol-based labels (✦, ★, ●, etc.)
-    - Anti-collision safeguards (no duplicate category/concept names)
-    - Full layout customization (width, height, fonts)
-    - Hover info control (all/minimal/none)
-    - Branch values mode (total/remainder)
-    - Category filtering
-    - Symbol legend
+    Each leaf label is the **Title-Cased concept name** (not the raw key).
+    Each category segment gets a distinct color from _SUNBURST_CATEGORY_COLORS.
+    Leaf colors are lighter/darker shades of their parent category color.
+
+    Parameters
+    ----------
+    graph : nx.Graph
+    node_weights : dict or None
+    min_weight : float
+    colormap_name : str  — fallback colormap if category not in the color map
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
     """
-    # Build data with symbol support
-    ids, labels, values, parents, symbols, id_to_symbol = build_sunburst_data_v2(
-        graph,
-        concept_abstract_map=concept_abstract_map,
-        node_weights=node_weights,
-        min_weight=min_weight,
-        top_n_per_category=top_n_per_category,
-        use_symbols=use_symbols,
-        category_filter=category_filter,
+    ids, labels, values, parents = build_sunburst_data(
+        graph, node_weights=node_weights, min_weight=min_weight
     )
 
     if len(ids) <= 1:
+        # Empty or only root — return a placeholder figure
         fig = go.Figure(go.Sunburst(
             ids=["root"],
             labels=["No data"],
@@ -1859,9 +4160,8 @@ def render_sunburst_chart_v2(
         ))
         fig.update_layout(
             title="Sunburst Hierarchy (no concepts above threshold)",
-            height=height,
-            width=width,
-            paper_bgcolor=theme_bg,
+            height=700,
+            paper_bgcolor="#1a1a2e",
             font=dict(color="white"),
         )
         return fig
@@ -1870,17 +4170,16 @@ def render_sunburst_chart_v2(
     n = len(ids)
     colors = []
 
-    # Get fallback palette
+    # Get fallback palette from matplotlib
     n_categories = sum(1 for p in parents if p == "")
     fallback_palette = get_colormap_colors(colormap_name, max(n_categories, 10))
     cat_color_idx = 0
 
     # Map category id → color
     cat_id_to_color: Dict[str, str] = {}
-
     for i in range(n):
-        if parents[i] == "":  # root
-            colors.append(theme_bg)
+        if parents[i] == "":  # root — skip
+            colors.append("#1a1a2e")
             continue
         if parents[i] == "Sodium-Ion Battery":  # category node
             c = _SUNBURST_CATEGORY_COLORS.get(ids[i])
@@ -1891,10 +4190,9 @@ def render_sunburst_chart_v2(
             colors.append(c)
         else:  # leaf node — lighter shade of parent
             parent_color = cat_id_to_color.get(parents[i], "#888888")
+            # Lighten: blend with white
             try:
-                r = int(parent_color[1:3], 16)
-                g = int(parent_color[3:5], 16)
-                b = int(parent_color[5:7], 16)
+                r, g, b = int(parent_color[1:3], 16), int(parent_color[3:5], 16), int(parent_color[5:7], 16)
                 r2 = min(255, r + 60)
                 g2 = min(255, g + 60)
                 b2 = min(255, b + 60)
@@ -1903,57 +4201,34 @@ def render_sunburst_chart_v2(
                 leaf_color = parent_color
             colors.append(leaf_color)
 
-    # Build hover template based on hover_info
-    if hover_info == "all":
-        hovertemplate = (
+    fig = go.Figure(go.Sunburst(
+        ids=ids,
+        labels=labels,
+        values=values,
+        parents=parents,
+        branchvalues="total",
+        marker=dict(colors=colors, line=dict(color="#1a1a2e", width=1.5)),
+        textfont=dict(size=11, color="white"),
+        hovertemplate=(
             "<b>%{label}</b><br/>"
             "Weight: %{value:.1f}<br/>"
             "Path: %{id}<extra></extra>"
-        )
-    elif hover_info == "minimal":
-        hovertemplate = "<b>%{label}</b><br/>Weight: %{value:.1f}<extra></extra>"
-    else:  # none
-        hovertemplate = None
-
-    # Use symbols as labels if enabled
-    display_labels = symbols if (use_symbols and show_labels) else labels
-
-    # Build textinfo
-    textinfo_parts = []
-    if show_labels:
-        textinfo_parts.append("label")
-    if show_values:
-        textinfo_parts.append("value")
-    textinfo = "+".join(textinfo_parts) if textinfo_parts else "none"
-
-    fig = go.Figure(go.Sunburst(
-        ids=ids,
-        labels=display_labels,
-        values=values,
-        parents=parents,
-        branchvalues=branchvalues,
-        marker=dict(
-            colors=colors, 
-            line=dict(color=theme_bg, width=1.5)
         ),
-        textfont=dict(size=label_size, color="white", family=font_family),
-        hovertemplate=hovertemplate,
         insidetextorientation="radial",
         maxdepth=3,
-        textinfo=textinfo,
     ))
 
     fig.update_layout(
         title=dict(
-            text=title,
+            text="Sodium-Ion Battery Concept Hierarchy — Sunburst",
             font=dict(size=18, color="white"),
             x=0.5,
         ),
-        height=height,
-        width=width,
-        paper_bgcolor=theme_bg,
-        plot_bgcolor=theme_bg,
-        font=dict(color="white", family=font_family),
+        height=750,
+        width=900,
+        paper_bgcolor="#1a1a2e",
+        plot_bgcolor="#1a1a2e",
+        font=dict(color="white", family="Arial"),
         margin=dict(t=60, b=40, l=20, r=20),
     )
 
@@ -3483,11 +5758,9 @@ def run_batch_analysis(
 # ============================================================================
 # SIDEBAR (AgNPs Pattern — Full Sunburst Customization)
 # ============================================================================
-def render_sidebar_improved() -> None:
+def render_sidebar() -> None:
     with st.sidebar:
-        st.header("⚙️ Configuration v6.2")
-
-        # === THEME ===
+        st.header("⚙️ Configuration v6.1")
         st.subheader("🎨 Theme")
         st.session_state['theme'] = st.selectbox(
             "Color theme:",
@@ -3495,19 +5768,15 @@ def render_sidebar_improved() -> None:
             index=0,
         )
         theme = THEME_PRESETS[st.session_state['theme']]
-
-        # === SIB FOCUS AREAS (collapsed) ===
-        with st.expander("🔬 Sodium-Ion Battery Focus Areas"):
-            st.markdown("- **Cathode Materials:** Layered oxides (NaMnO₂), Polyanionic (Na₃V₂(PO₄)₃), Prussian blue analogues, NASICON")
-            st.markdown("- **Anode Materials:** Hard carbon, Sodium metal, Alloying (Sn, Sb), Intercalation (TiO₂)")
-            st.markdown("- **Electrolytes:** Liquid, Solid (NASICON, sulfide), Polymer, Quasi-solid")
-            st.markdown("- **Electrochemical Properties:** Specific capacity, Energy density, Coulombic efficiency, Cycle life, Rate capability, Ionic conductivity")
-            st.markdown("- **Phenomena:** Dendrite growth, SEI formation, Plating/stripping, Intercalation")
-            st.markdown("- **Methods:** CV, EIS, Galvanostatic cycling, Operando characterization")
-            st.markdown("- **Parameters:** Current density, Cut-off voltage, Temperature")
-            st.markdown("- **Processing:** Slurry coating, Cell assembly")
-
-        # === NLP REASONING OPTIONS ===
+        st.subheader("🔬 Sodium-Ion Battery Focus Areas")
+        st.markdown("- **Cathode Materials:** Layered oxides (NaMnO₂), Polyanionic (Na₃V₂(PO₄)₃), Prussian blue analogues, NASICON")
+        st.markdown("- **Anode Materials:** Hard carbon, Sodium metal, Alloying (Sn, Sb), Intercalation (TiO₂)")
+        st.markdown("- **Electrolytes:** Liquid, Solid (NASICON, sulfide), Polymer, Quasi-solid")
+        st.markdown("- **Electrochemical Properties:** Specific capacity, Energy density, Coulombic efficiency, Cycle life, Rate capability, Ionic conductivity")
+        st.markdown("- **Phenomena:** Dendrite growth, SEI formation, Plating/stripping, Intercalation")
+        st.markdown("- **Methods:** CV, EIS, Galvanostatic cycling, Operando characterization")
+        st.markdown("- **Parameters:** Current density, Cut-off voltage, Temperature")
+        st.markdown("- **Processing:** Slurry coating, Cell assembly")
         st.subheader("🧠 NLP Reasoning Options")
         st.session_state['use_ontology'] = st.checkbox(
             "Use ontology-based resolution", value=True,
@@ -3529,166 +5798,25 @@ def render_sidebar_improved() -> None:
             "Context window (chars)", 20, 200, 50,
             help="Window size for context-based disambiguation",
         )
-
-        # === VISUALIZATION ENGINE ===
         st.subheader("📊 Visualization")
         st.session_state['viz_backend'] = st.selectbox(
             "Engine:",
             ["PyVis (Interactive)", "Plotly 2D", "Plotly 3D", "Text Summary"],
             index=0,
         )
-
-        # === EDGE CUSTOMIZATION (NEW) ===
-        st.subheader("🔗 Edge Customization")
-
-        st.session_state['edge_color_mode'] = st.selectbox(
-            "Edge color mode:",
-            ["theme", "uniform_grey", "custom"],
-            index=0,
-            help="theme=per relationship type, uniform_grey=single grey, custom=user-defined",
-            key="edge_color_mode_select",
-        )
-
-        if st.session_state['edge_color_mode'] == "custom":
-            st.session_state['custom_edge_color'] = st.color_picker(
-                "Custom edge color:",
-                value="#808080",
-                key="custom_edge_color_picker",
-            )
-        else:
-            st.session_state['custom_edge_color'] = "#808080"
-
-        st.session_state['edge_lightness'] = st.slider(
-            "Edge lightness", 0.0, 1.0, 0.0, step=0.1,
-            help="Lighten edge colors by blending with white (0=dark, 1=white)",
-            key="edge_lightness_slider",
-        )
-
-        st.session_state['edge_width_scale'] = st.slider(
-            "Edge width scale", 0.5, 3.0, 1.0, step=0.1,
-            help="Multiplier for all edge widths",
-            key="edge_width_scale_slider",
-        )
-
-        st.session_state['edge_opacity'] = st.slider(
-            "Edge opacity", 0.1, 1.0, 0.85, step=0.05,
-            help="Transparency of edges (0=invisible, 1=opaque)",
-            key="edge_opacity_slider",
-        )
-
-        st.session_state['show_edge_legend'] = st.checkbox(
-            "Show edge type legend", value=True,
-            help="Display color legend for relationship types in the graph",
-            key="show_edge_legend_chk",
-        )
-
         st.session_state['show_edge_weights'] = st.toggle(
-            "Show edge weight labels", value=False,
+            "Show edge weights", value=False,
             help="Display numerical weight labels on graph edges.",
         )
-
         st.session_state['edge_label_mode'] = st.selectbox(
             "Edge label mode:", ["hover", "threshold", "all"], index=0,
             help="hover=tooltip only, threshold=top 20% edges, all=all edges",
         )
-
-        with st.expander("Advanced Edge Label Settings"):
-            st.session_state['edge_label_size'] = st.slider(
-                "Edge label font size", 6, 18, 10, step=1,
-                help="Font size for edge weight labels",
-            )
-            st.session_state['edge_label_color'] = st.color_picker(
-                "Edge label color", value="#000000",
-                help="Color for edge weight labels (default matches theme)",
-            )
-            st.session_state['edge_label_position'] = st.selectbox(
-                "Edge label position",
-                ["middle", "top", "bottom", "from", "to"],
-                index=0,
-                help="Where to place edge labels along the edge",
-            )
-
-        # === NODE CUSTOMIZATION (NEW) ===
-        st.subheader("🔵 Node Customization")
-
-        st.session_state['hierarchy_label_style'] = st.selectbox(
-            "Hierarchy label style:",
-            ["arrow", "bracket", "dot", "leaf"],
-            index=0,
-            help="How to display hierarchy: arrow='Cat → Concept', bracket='Cat [Concept]', dot='Cat · Concept', leaf='Concept only'",
-            key="hierarchy_label_style_select",
-        )
-
-        st.session_state['min_node_size'] = st.slider(
-            "Min node size", 4, 20, 8, step=1,
-            help="Minimum pixel size for nodes",
-            key="min_node_size_slider",
-        )
-
-        st.session_state['max_node_size'] = st.slider(
-            "Max node size", 20, 80, 40, step=2,
-            help="Maximum pixel size for nodes",
-            key="max_node_size_slider",
-        )
-
-        st.session_state['node_size_scale'] = st.slider(
-            "Node size scale", 0.5, 2.0, 1.0, step=0.1,
-            help="Multiplier for node sizes based on frequency",
-            key="node_size_scale_slider",
-        )
-
-        st.session_state['node_label_size'] = st.slider(
-            "Node label font size", 8, 24, 12, step=1,
-            help="Font size for node labels in the graph",
-        )
-
-        st.session_state['node_label_position'] = st.selectbox(
-            "Node label position",
-            ["center", "top", "bottom", "left", "right"],
-            index=0,
-            help="Where to place node labels relative to nodes",
-        )
-
-        st.session_state['node_font_face'] = st.selectbox(
-            "Node font family",
-            [
-                "Inter, Segoe UI, Roboto, sans-serif",
-                "Arial, Helvetica, sans-serif",
-                "Georgia, serif",
-                "Courier New, monospace",
-                "Times New Roman, serif",
-            ],
+        st.session_state['cmap_name'] = st.selectbox(
+            "Colormap:",
+            options=list(SUPPORTED_COLORMAPS.keys()),
             index=0,
         )
-
-        st.session_state['use_abbreviated_labels'] = st.checkbox(
-            "Use short labels (N1, N2...) for long names",
-            value=False,
-            help="Replaces long node labels with N1, N2... and generates a legend below the graph.",
-        )
-
-        if st.session_state['use_abbreviated_labels']:
-            st.session_state['max_label_length'] = st.slider(
-                "Max label length before abbreviation",
-                min_value=2, max_value=50, value=15, step=1,
-                help="Labels longer than this threshold will be replaced by N1, N2, etc.",
-            )
-        else:
-            st.session_state['max_label_length'] = 15
-
-        st.session_state['show_definitions'] = st.checkbox(
-            "📖 Show concept definitions in tooltips",
-            value=True,
-            help="When enabled, hovering over a node displays its ontology definition in the tooltip.",
-        )
-
-        st.session_state['enable_node_highlight'] = st.checkbox(
-            "🔍 Enable Node Selection Highlight & Descriptions",
-            value=False,
-            help="When enabled, clicking a node highlights connected nodes with gold borders and overlays edge weights/relationship descriptions.",
-        )
-
-        # === PHYSICS & LAYOUT ===
         st.subheader("⚡ Physics & Layout")
         st.session_state['physics_preset'] = st.selectbox(
             "Physics preset:",
@@ -3699,7 +5827,6 @@ def render_sidebar_improved() -> None:
         st.session_state['physics_enabled'] = st.checkbox(
             "Enable physics", value=(preset["gravity"] != 0),
         )
-
         with st.expander("Advanced Physics Overrides"):
             st.session_state['adv_damping'] = st.slider(
                 "Damping", 0.05, 0.95, preset["damping"], step=0.05,
@@ -3722,8 +5849,9 @@ def render_sidebar_improved() -> None:
                 "Stabilization iter", 0, 5000,
                 preset["stabilization"], step=250,
             )
-
-        base_preset = PHYSICS_PRESETS[st.session_state['physics_preset']].copy()
+        base_preset = PHYSICS_PRESETS[
+            st.session_state['physics_preset']
+        ].copy()
         if st.session_state.get('adv_damping') is not None:
             base_preset["damping"] = st.session_state['adv_damping']
             base_preset["gravity"] = st.session_state['adv_gravity']
@@ -3732,8 +5860,6 @@ def render_sidebar_improved() -> None:
             base_preset["central_gravity"] = st.session_state['adv_central_gravity']
             base_preset["stabilization"] = st.session_state['adv_stabilization']
         st.session_state['effective_physics'] = base_preset
-
-        # === DISPLAY LIMITS ===
         st.subheader("📏 Display Limits")
         col_all1, col_slider1 = st.columns([0.3, 0.7])
         with col_all1:
@@ -3745,7 +5871,6 @@ def render_sidebar_improved() -> None:
             )
         if all_graph:
             st.session_state['top_n_graph'] = 0
-
         col_all2, col_slider2 = st.columns([0.3, 0.7])
         with col_all2:
             all_sun = st.checkbox("All", value=True, key="all_sun_chk")
@@ -3756,7 +5881,6 @@ def render_sidebar_improved() -> None:
             )
         if all_sun:
             st.session_state['top_n_sunburst'] = 0
-
         col_all3, col_slider3 = st.columns([0.3, 0.7])
         with col_all3:
             all_radar = st.checkbox("All", value=True, key="all_radar_chk")
@@ -3767,8 +5891,6 @@ def render_sidebar_improved() -> None:
             )
         if all_radar:
             st.session_state['top_n_radar'] = 0
-
-        # === GRAPH PARAMETERS ===
         st.subheader("🔧 Graph Parameters")
         st.session_state['min_freq'] = st.slider(
             "Min concept frequency", 1, 20, 1,
@@ -3788,11 +5910,10 @@ def render_sidebar_improved() -> None:
         st.session_state['inf_weight'] = st.slider(
             "Inference weight", 0.0, 0.3, 0.1, step=0.05,
         )
-
+        
         # Batch Processing Controls
         render_batch_processing_controls()
 
-        # === STATISTICS ===
         st.subheader("📈 Statistics")
         st.session_state['bootstrap_samples'] = st.slider(
             "Bootstrap samples", 100, 2000, 500, step=100,
@@ -3802,117 +5923,76 @@ def render_sidebar_improved() -> None:
         )
 
         st.markdown("---")
-
-        # === SUNBURST CHART CUSTOMIZATION (IMPROVED) ===
-        st.subheader("☀️ Sunburst Chart Customization")
-
-        st.session_state['sunburst_cmap'] = st.selectbox(
-            "Colormap:",
-            options=[
-                "viridis", "plasma", "inferno", "magma", "cividis",
-                "turbo", "rainbow", "hsv", "coolwarm", "RdBu", "Spectral",
-                "tab10", "tab20", "Pastel1", "Set1", "Set2", "Set3",
-                "YlOrRd", "PuBuGn", "GnBu", "YlGnBu",
-            ],
-            index=0,
-            help="Choose color scheme for sunburst categories",
-            key="sunburst_cmap_select",
-        )
-
-        st.session_state['sunburst_use_symbols'] = st.checkbox(
-            "Use symbol labels (✦, ★, ●, etc.)",
+        st.subheader("🎨 Visualization Customization")
+        st.session_state['enable_node_highlight'] = st.checkbox(
+            "🔍 Enable Node Selection Highlight & Descriptions",
             value=False,
-            help="Display symbol combinations instead of text inside sunburst slices",
-            key="sunburst_use_symbols_chk",
+            help=(
+                "When enabled, clicking a node highlights connected nodes "
+                "with gold borders and overlays edge weights/relationship descriptions."
+            ),
         )
-
-        if st.session_state['sunburst_use_symbols']:
-            st.session_state['sunburst_show_symbol_legend'] = st.checkbox(
-                "Show symbol legend", value=True,
-                help="Display symbol-to-label mapping table below chart",
-                key="sunburst_show_symbol_legend_chk",
+        with st.expander("Node & Label Settings"):
+            st.session_state['node_label_size'] = st.slider(
+                "Node label font size", 8, 24, 12, step=1,
+                help="Font size for node labels in the graph",
             )
-
-        st.session_state['sunburst_font_family'] = st.selectbox(
-            "Sunburst font family",
-            [
-                "Arial, sans-serif",
-                "Inter, Segoe UI, Roboto, sans-serif",
-                "Georgia, serif",
-                "Courier New, monospace",
-                "Times New Roman, serif",
-            ],
-            index=0,
-            help="Font family for sunburst chart labels",
-            key="sunburst_font_family_select",
+            st.session_state['node_label_position'] = st.selectbox(
+                "Node label position",
+                ["center", "top", "bottom", "left", "right"],
+                index=0,
+                help="Where to place node labels relative to nodes",
+            )
+            st.session_state['node_font_face'] = st.selectbox(
+                "Node font family",
+                [
+                    "Inter, Segoe UI, Roboto, sans-serif",
+                    "Arial, Helvetica, sans-serif",
+                    "Georgia, serif",
+                    "Courier New, monospace",
+                    "Times New Roman, serif",
+                ],
+                index=0,
+            )
+        st.session_state['use_abbreviated_labels'] = st.checkbox(
+            "Use short labels (N1, N2...) for long names",
+            value=False,
+            help="Replaces long node labels with N1, N2... and generates a legend below the graph.",
         )
-
-        col_labels, col_values = st.columns(2)
-        with col_labels:
-            st.session_state['sunburst_show_labels'] = st.checkbox(
-                "Show labels", value=True,
-                help="Display labels inside chart segments",
-                key="sunburst_show_labels_chk",
-            )
-        with col_values:
-            st.session_state['sunburst_show_values'] = st.checkbox(
-                "Show values", value=False,
-                help="Display numerical values inside chart segments",
-                key="sunburst_show_values_chk",
-            )
-
-        st.session_state['sunburst_hover_info'] = st.selectbox(
-            "Hover information:",
-            options=["all", "minimal", "none"],
-            index=0,
-            help="Amount of information shown on hover tooltip",
-            key="sunburst_hover_select",
-        )
-
-        st.session_state['sunburst_branchvalues'] = st.selectbox(
-            "Branch values mode:", ["total", "remainder"], index=0,
-            help="How to calculate branch sizes: total=sum of children, remainder=parent minus children",
-            key="sunburst_branch_mode",
-        )
-
-        col_w, col_h = st.columns(2)
-        with col_w:
-            st.session_state['sunburst_width'] = st.slider(
-                "Chart width (px)", 600, 1400, 900, step=50,
-                key="sunburst_width_slider",
-            )
-        with col_h:
-            st.session_state['sunburst_height'] = st.slider(
-                "Chart height (px)", 500, 1200, 700, step=50,
-                key="sunburst_height_slider",
-            )
-
-        st.session_state['sunburst_label_size'] = st.slider(
-            "Label font size", 8, 30, 20, step=1,
-            help="Size of labels inside sunburst slices",
-            key="sunburst_label_size_slider",
-        )
-
-        if (
-            st.session_state.get('analysis_data')
-            and st.session_state['analysis_data'].get('valid_concepts')
-        ):
-            all_cats = list(set(
-                abstract_concepts_to_categories(
-                    st.session_state['analysis_data']['valid_concepts']
-                ).values()
-            ))
-            st.session_state['sunburst_categories'] = st.multiselect(
-                "Filter categories:", options=all_cats,
-                default=all_cats, key="sunburst_cat_filter",
+        if st.session_state['use_abbreviated_labels']:
+            st.session_state['max_label_length'] = st.slider(
+                "Max label length before abbreviation",
+                min_value=2, max_value=50, value=15, step=1,
+                help="Labels longer than this threshold will be replaced by N1, N2, etc.",
             )
         else:
-            st.info("Build graph first to filter categories.")
-            st.session_state['sunburst_categories'] = []
+            st.session_state['max_label_length'] = 15
+        st.session_state['show_definitions'] = st.checkbox(
+            "📖 Show concept definitions in tooltips",
+            value=True,
+            help="When enabled, hovering over a node displays its ontology definition in the tooltip.",
+        )
+        with st.expander("Edge Label Settings"):
+            st.session_state['edge_label_size'] = st.slider(
+                "Edge label font size", 6, 18, 10, step=1,
+                help="Font size for edge weight labels",
+            )
+            st.session_state['edge_label_color'] = st.color_picker(
+                "Edge label color", value="#000000",
+                help="Color for edge weight labels (default matches theme)",
+            )
+            st.session_state['edge_label_position'] = st.selectbox(
+                "Edge label position",
+                ["middle", "top", "bottom", "from", "to"],
+                index=0,
+                help="Where to place edge labels along the edge",
+            )
+        edge_color_value = st.session_state.get('edge_label_color')
+        if not edge_color_value or edge_color_value == '':
+            edge_color_value = '#000000'
+        st.session_state['edge_label_color'] = edge_color_value
 
         st.markdown("---")
-
-        # === GRAPH EDITING ===
         st.subheader("✏️ Graph Editing")
         with st.expander("Remove Nodes"):
             if (
@@ -3928,7 +6008,6 @@ def render_sidebar_improved() -> None:
             else:
                 st.info("Build graph first to edit nodes.")
                 st.session_state['nodes_to_remove'] = []
-
         with st.expander("Merge Nodes"):
             if (
                 st.session_state.get('analysis_data')
@@ -3948,7 +6027,6 @@ def render_sidebar_improved() -> None:
                 st.info("Build graph first to merge nodes.")
                 st.session_state['nodes_to_merge'] = []
                 st.session_state['merge_name'] = ""
-
         with st.expander("Add Edge"):
             if (
                 st.session_state.get('analysis_data')
@@ -3973,7 +6051,6 @@ def render_sidebar_improved() -> None:
                 st.info("Build graph first to add edges.")
                 st.session_state['new_edge'] = None
                 st.session_state['new_edge_weight'] = 1.0
-
         with st.expander("Filter by Degree/Frequency"):
             st.session_state['filter_min_degree'] = st.slider(
                 "Min degree", 0, 20, 0, key="filter_degree_slider",
@@ -3981,14 +6058,12 @@ def render_sidebar_improved() -> None:
             st.session_state['filter_min_freq'] = st.slider(
                 "Min frequency", 0, 50, 0, key="filter_freq_slider",
             )
-
         if (
             st.session_state.get('analysis_data')
             and st.session_state['analysis_data'].get('valid_concepts')
         ):
             if st.button("Apply Graph Edits", key="apply_edits_btn"):
                 st.session_state['apply_edits'] = True
-
         if (
             st.session_state.get('analysis_data')
             and st.session_state.get('edit_history')
@@ -4030,8 +6105,96 @@ def render_sidebar_improved() -> None:
                             st.experimental_rerun()
 
         st.markdown("---")
+        st.subheader("☀️ Sunburst Chart Customization")
+        st.session_state['sunburst_cmap'] = st.selectbox(
+            "Colormap:",
+            options=[
+                "viridis", "plasma", "inferno", "magma", "cividis",
+                "turbo", "rainbow", "hsv", "coolwarm", "RdBu", "Spectral",
+                "tab10", "tab20", "Pastel1", "Set1", "Set2", "Set3",
+                "YlOrRd", "PuBuGn", "GnBu", "YlGnBu",
+            ],
+            index=0,
+            help="Choose color scheme for sunburst categories",
+            key="sunburst_cmap_select",
+        )
+        st.session_state['sunburst_font_family'] = st.selectbox(
+            "Sunburst font family",
+            [
+                "Arial, sans-serif",
+                "Inter, Segoe UI, Roboto, sans-serif",
+                "Georgia, serif",
+                "Courier New, monospace",
+                "Times New Roman, serif",
+            ],
+            index=0,
+            help="Font family for sunburst chart labels",
+            key="sunburst_font_family_select",
+        )
+        col_labels, col_values = st.columns(2)
+        with col_labels:
+            st.session_state['sunburst_show_labels'] = st.checkbox(
+                "Show symbols", value=True,
+                help="Display symbol combinations inside chart segments",
+                key="sunburst_show_labels_chk",
+            )
+        with col_values:
+            st.session_state['sunburst_show_values'] = st.checkbox(
+                "Show values", value=False,
+                help="Display numerical values inside chart segments",
+                key="sunburst_show_values_chk",
+            )
+        st.session_state['sunburst_hover_info'] = st.selectbox(
+            "Hover information:",
+            options=["all", "minimal", "none"],
+            index=0,
+            help="Amount of information shown on hover tooltip",
+            key="sunburst_hover_select",
+        )
+        st.session_state['sunburst_branchvalues'] = st.selectbox(
+            "Branch values mode:", ["total", "remainder"], index=0,
+            help="How to calculate branch sizes: total=sum of children, remainder=parent minus children",
+            key="sunburst_branch_mode",
+        )
+        col_w, col_h = st.columns(2)
+        with col_w:
+            st.session_state['sunburst_width'] = st.slider(
+                "Chart width (px)", 600, 1400, 900, step=50,
+                key="sunburst_width_slider",
+            )
+        with col_h:
+            st.session_state['sunburst_height'] = st.slider(
+                "Chart height (px)", 500, 1200, 700, step=50,
+                key="sunburst_height_slider",
+            )
+        st.session_state['sunburst_label_size'] = st.slider(
+            "Symbol font size", 8, 30, 20, step=1,
+            help="Size of symbols inside sunburst slices",
+            key="sunburst_label_size_slider",
+        )
+        st.session_state['sunburst_show_legend'] = st.checkbox(
+            "Show symbol legend", value=True,
+            help="Display symbol-to-label mapping table below chart",
+            key="sunburst_show_legend_chk",
+        )
+        if (
+            st.session_state.get('analysis_data')
+            and st.session_state['analysis_data'].get('valid_concepts')
+        ):
+            all_cats = list(set(
+                abstract_concepts_to_categories(
+                    st.session_state['analysis_data']['valid_concepts']
+                ).values()
+            ))
+            st.session_state['sunburst_categories'] = st.multiselect(
+                "Filter categories:", options=all_cats,
+                default=all_cats, key="sunburst_cat_filter",
+            )
+        else:
+            st.info("Build graph first to filter categories.")
+            st.session_state['sunburst_categories'] = []
 
-        # === PERFORMANCE MONITOR ===
+        st.markdown("---")
         with st.expander("⚡ Performance Monitor"):
             if st.button("Show Timing Report"):
                 report = PerformanceMonitor.get_report()
@@ -4052,9 +6215,13 @@ def render_sidebar_improved() -> None:
         gpu_info = "CUDA" if torch.cuda.is_available() else "CPU"
         st.caption(f"Device: {gpu_info}")
 
+
+# ============================================================================
+# MAIN APPLICATION
+# ============================================================================
 def main() -> None:
     st.title(
-        "🔋 Sodium-Ion Battery Quantitative Descriptor Graph v6.2"
+        "🔋 Sodium-Ion Battery Quantitative Descriptor Graph v6.1"
     )
     st.caption(
         "Multi-level reasoning concept graph for numerical/quantitative description of Sodium-Ion Batteries | "
@@ -4067,7 +6234,7 @@ def main() -> None:
         st.session_state.ontology = DomainOntology()
     ontology = st.session_state.ontology
 
-    render_sidebar_improved()
+    render_sidebar()
 
     # AgNPs pattern: Initialize ALL session_state keys
     if "analysis_data" not in st.session_state:
@@ -4088,53 +6255,6 @@ def main() -> None:
         st.session_state.bridge_df = None
     if "motifs" not in st.session_state:
         st.session_state.motifs = {}
-
-    # NEW v6.2: Edge customization session state defaults
-    if "edge_color_mode" not in st.session_state:
-        st.session_state.edge_color_mode = "theme"
-    if "custom_edge_color" not in st.session_state:
-        st.session_state.custom_edge_color = "#808080"
-    if "edge_lightness" not in st.session_state:
-        st.session_state.edge_lightness = 0.0
-    if "edge_width_scale" not in st.session_state:
-        st.session_state.edge_width_scale = 1.0
-    if "edge_opacity" not in st.session_state:
-        st.session_state.edge_opacity = 0.85
-    if "show_edge_legend" not in st.session_state:
-        st.session_state.show_edge_legend = True
-    if "hierarchy_label_style" not in st.session_state:
-        st.session_state.hierarchy_label_style = "arrow"
-    if "min_node_size" not in st.session_state:
-        st.session_state.min_node_size = 8
-    if "max_node_size" not in st.session_state:
-        st.session_state.max_node_size = 40
-    if "node_size_scale" not in st.session_state:
-        st.session_state.node_size_scale = 1.0
-    # NEW v6.2: Sunburst customization session state defaults
-    if "sunburst_use_symbols" not in st.session_state:
-        st.session_state.sunburst_use_symbols = False
-    if "sunburst_show_symbol_legend" not in st.session_state:
-        st.session_state.sunburst_show_symbol_legend = True
-    if "sunburst_width" not in st.session_state:
-        st.session_state.sunburst_width = 900
-    if "sunburst_height" not in st.session_state:
-        st.session_state.sunburst_height = 700
-    if "sunburst_show_labels" not in st.session_state:
-        st.session_state.sunburst_show_labels = True
-    if "sunburst_show_values" not in st.session_state:
-        st.session_state.sunburst_show_values = False
-    if "sunburst_hover_info" not in st.session_state:
-        st.session_state.sunburst_hover_info = "all"
-    if "sunburst_branchvalues" not in st.session_state:
-        st.session_state.sunburst_branchvalues = "total"
-    if "sunburst_font_family" not in st.session_state:
-        st.session_state.sunburst_font_family = "Arial, sans-serif"
-    if "sunburst_label_size" not in st.session_state:
-        st.session_state.sunburst_label_size = 20
-    if "sunburst_cmap" not in st.session_state:
-        st.session_state.sunburst_cmap = "viridis"
-    if "sunburst_categories" not in st.session_state:
-        st.session_state.sunburst_categories = []
 
     # --- LOAD JSON DATA ---
     st.header("📁 Data Loading")
@@ -4633,7 +6753,7 @@ def main() -> None:
             edge_label_mode = st.session_state.get('edge_label_mode', 'hover')
 
             if viz_choice == "PyVis (Interactive)":
-                render_pyvis_graph_v2(
+                render_pyvis_graph(
                     nx_graph, concept_abstract_map,
                     physics_enabled=physics,
                     cmap_name=cmap,
@@ -4652,17 +6772,6 @@ def main() -> None:
                     max_label_length=st.session_state.get('max_label_length', 15),
                     enable_node_highlight=st.session_state.get('enable_node_highlight', False),
                     show_definitions=st.session_state.get('show_definitions', True),
-                    # NEW: Edge customization
-                    edge_color_mode=st.session_state.get('edge_color_mode', 'theme'),
-                    custom_edge_color=st.session_state.get('custom_edge_color', '#808080'),
-                    edge_lightness=st.session_state.get('edge_lightness', 0.0),
-                    edge_width_scale=st.session_state.get('edge_width_scale', 1.0),
-                    edge_opacity=st.session_state.get('edge_opacity', 0.85),
-                    show_edge_legend=st.session_state.get('show_edge_legend', True),
-                    hierarchy_label_style=st.session_state.get('hierarchy_label_style', 'arrow'),
-                    min_node_size=st.session_state.get('min_node_size', 8),
-                    max_node_size=st.session_state.get('max_node_size', 40),
-                    node_size_scale=st.session_state.get('node_size_scale', 1.0),
                 )
             elif viz_choice == "Plotly 2D":
                 render_graph_plotly_2d(
@@ -4674,19 +6783,19 @@ def main() -> None:
                     node_label_size=st.session_state.get('node_label_size') or 10,
                 )
             elif viz_choice == "Plotly 3D":
-                    render_graph_plotly_3d(
-                        nx_graph, concept_abstract_map,
-                        cmap_name=cmap, top_n_nodes=top_n,
-                        theme=theme, show_edge_weights=show_weights,
-                    )
+                render_graph_plotly_3d(
+                    nx_graph, concept_abstract_map,
+                    cmap_name=cmap, top_n_nodes=top_n,
+                    theme=theme, show_edge_weights=show_weights,
+                )
             else:
-                        render_graph_fallback(
-                            nx_graph, concept_abstract_map,
-                            theme=theme, show_edge_weights=show_weights,
-                        )
+                render_graph_fallback(
+                    nx_graph, concept_abstract_map,
+                    theme=theme, show_edge_weights=show_weights,
+                )
             with st.expander("Graph Metrics"):
-                    metrics = compute_graph_metrics(nx_graph)
-                    display_metric_dashboard(metrics, theme=theme)
+                metrics = compute_graph_metrics(nx_graph)
+                display_metric_dashboard(metrics, theme=theme)
             with st.expander("Domain Hierarchy (Sunburst)"):
                 cat_filter = st.session_state.get('sunburst_categories', [])
 
@@ -4706,53 +6815,15 @@ def main() -> None:
                 node_weights = {c: len(concept_abstract_map.get(c, [])) for c in filtered_concepts}
 
                 # Call the existing render_sunburst_chart with the correct signature
-                fig = render_sunburst_chart_v2(
+                fig = render_sunburst_chart(
                     filtered_graph,
-                    concept_abstract_map=concept_abstract_map,
                     node_weights=node_weights,
                     min_weight=0.0,
                     colormap_name=st.session_state.get('sunburst_cmap', cmap),
-                    # NEW customization from sidebar
-                    width=st.session_state.get('sunburst_width', 900),
-                    height=st.session_state.get('sunburst_height', 700),
-                    show_labels=st.session_state.get('sunburst_show_labels', True),
-                    show_values=st.session_state.get('sunburst_show_values', False),
-                    hover_info=st.session_state.get('sunburst_hover_info', 'all'),
-                    branchvalues=st.session_state.get('sunburst_branchvalues', 'total'),
-                    font_family=st.session_state.get('sunburst_font_family', 'Arial, sans-serif'),
-                    label_size=st.session_state.get('sunburst_label_size', 20),
-                    use_symbols=st.session_state.get('sunburst_use_symbols', False),
-                    show_symbol_legend=st.session_state.get('sunburst_show_symbol_legend', True),
-                    top_n_per_category=st.session_state.get('top_n_sunburst', 0),
-                    category_filter=cat_filter if cat_filter else None,
-                    theme_bg="#1a1a2e",
-                    title="Sodium-Ion Battery Concept Hierarchy — Sunburst",
                 )
+
+                # Display the Plotly figure
                 st.plotly_chart(fig, use_container_width=True)
-
-                # Show symbol legend if enabled
-                if (st.session_state.get('sunburst_use_symbols', False) and 
-                    st.session_state.get('sunburst_show_symbol_legend', True)):
-
-                    sunburst_data = fig.data[0]
-                    if sunburst_data and hasattr(sunburst_data, 'ids'):
-                        ids = sunburst_data.ids
-                        labels = sunburst_data.labels
-                        parents = sunburst_data.parents
-
-                        st.markdown("---")
-                        st.markdown("### 🗺️ Symbol Legend")
-
-                        legend_data = []
-                        for i, node_id in enumerate(ids):
-                            if parents[i] != "":  # Skip root
-                                symbol = labels[i]
-                                full_name = node_id.replace('_', ' ').title()
-                                legend_data.append({"Symbol": symbol, "Concept": full_name})
-
-                        if legend_data:
-                            legend_df = pd.DataFrame(legend_data)
-                            st.dataframe(legend_df, use_container_width=True)
             with st.expander("Concept Radar"):
                 radar_k = st.session_state.get('top_n_radar', 15)
                 if radar_k == 0:
