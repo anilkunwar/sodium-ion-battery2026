@@ -2704,10 +2704,10 @@ def detect_keyword_bursts(
     burst_threshold: float = 2.0,
 ) -> pd.DataFrame:
     if "Year" not in df_filtered.columns or df_filtered["Year"].isna().all():
-        return pd.DataFrame()
+        return pd.DataFrame(columns=["concept", "burst_score", "burst_year", "total_mentions", "year_range"])
     years = df_filtered["Year"].dropna().astype(int)
     if len(years.unique()) < 3:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=["concept", "burst_score", "burst_year", "total_mentions", "year_range"])
     year_range = sorted(years.unique())
     burst_data: List[Dict[str, Any]] = []
     for concept in valid_concepts:
@@ -2747,6 +2747,10 @@ def detect_keyword_bursts(
                     "total_mentions": len(concept_years),
                     "year_range": f"{min(concept_years)}-{max(concept_years)}",
                 })
+    if not burst_data:
+
+        return pd.DataFrame(columns=["concept", "burst_score", "burst_year", "total_mentions", "year_range"])
+
     return pd.DataFrame(burst_data).sort_values(
         "burst_score", ascending=False
     )
@@ -2762,10 +2766,10 @@ def detect_semantic_drift(
     late_fraction: float = 0.3,
 ) -> pd.DataFrame:
     if "Year" not in df_filtered.columns or df_filtered["Year"].isna().all():
-        return pd.DataFrame()
+        return pd.DataFrame(columns=["concept", "semantic_drift", "early_papers", "late_papers", "early_period", "late_period"])
     years = df_filtered["Year"].dropna().astype(int)
     if len(years.unique()) < 4:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=["concept", "semantic_drift", "early_papers", "late_papers", "early_period", "late_period"])
     embed_model = load_embedding_model()
     sorted_years = sorted(years.unique())
     n_years = len(sorted_years)
@@ -2825,6 +2829,10 @@ def detect_semantic_drift(
                 torch.cuda.empty_cache()
         except Exception:
             continue
+    if not drift_data:
+
+        return pd.DataFrame(columns=["concept", "semantic_drift", "early_papers", "late_papers", "early_period", "late_period"])
+
     return pd.DataFrame(drift_data).sort_values(
         "semantic_drift", ascending=False
     )
@@ -2878,6 +2886,10 @@ def build_concept_genealogy(
             "degree": degree,
             "generation": generation,
         })
+    if not genealogy_data:
+
+        return pd.DataFrame(columns=["concept", "pagerank", "betweenness", "frequency", "degree", "generation"])
+
     return pd.DataFrame(genealogy_data).sort_values(
         "pagerank", ascending=False
     )
@@ -2918,6 +2930,10 @@ def detect_cross_domain_bridges(
             "degree": len(neighbors),
             "own_category": own_cat,
         })
+    if not bridge_data:
+
+        return pd.DataFrame(columns=["concept", "bridge_score", "betweenness", "connected_categories", "categories", "degree", "own_category"])
+
     return pd.DataFrame(bridge_data).sort_values(
         "bridge_score", ascending=False
     )
