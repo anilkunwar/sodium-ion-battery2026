@@ -3531,21 +3531,16 @@ def render_pyvis_graph(
         _physics_opts = {"enabled": False}
 
     # Safely inject physics options (compatible with pyvis 0.3.x)
-    # In pyvis >= 0.3.2, net.options is a custom Options object, not a dict.
+    # Use pyvis's canonical set_options() API with a JSON string.
+    # This avoids the "Interaction is not JSON serializable" error
+    # caused by manipulating net.options.__dict__ directly.
     try:
-        if not isinstance(net.options, dict):
-            net.options = (
-                dict(net.options.__dict__)
-                if hasattr(net.options, "__dict__")
-                else {}
-            )
-        net.options["physics"] = _physics_opts
+        import json as _json
+        net.set_options(_json.dumps({"physics": _physics_opts}))
     except Exception:
-        try:
-            import json as _json
-            net.set_options(_json.dumps({"physics": _physics_opts}))
-        except Exception:
-            pass  # Physics will use library defaults
+        # Ultimate fallback: if set_options fails, physics will use
+        # library defaults (graph still renders, just without custom physics)
+        pass
 
     # --- Node colors by category ---
     cmap_colors = get_colormap_colors(cmap_name, max(len(nx_graph.nodes()), 1))
