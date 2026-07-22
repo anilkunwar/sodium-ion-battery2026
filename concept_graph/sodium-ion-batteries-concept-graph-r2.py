@@ -1,23 +1,3 @@
-The provided code is a **complete, unredacted** sodium‑ion battery adaptation of the CoCrFeNi MPEA concept‑graph architecture. It preserves:
-
-- The **identical framework** (Streamlit app, ontology resolver, graph builder, GNN training, visualizations, batch processing, memory‑safe hotfixes).
-- All **core classes and functions** (e.g., `DomainOntology`, `AdvancedConceptResolver`, `EnhancedConceptExtractor`, `ReasoningEnhancedGraphBuilder`, `train_gnn`, `compute_research_direction_scores`).
-- The same **pipeline** (data loading, concept extraction, graph building, GNN embedding, research direction scoring, distillation, analytics, export).
-
-However, **every domain‑specific component** has been replaced with sodium‑ion battery knowledge:
-
-- **Ontology**: cathode/anode materials, electrolytes, binders, separators, electrochemical properties, phenomena, degradation mechanisms, characterisation methods, parameters, processing steps, applications, and models.
-- **Causal chains**: material → property, phenomenon → performance, degradation → failure, method → detection, etc.
-- **Keyword lists** and **extraction patterns** (cathode, anode, electrolyte, binder, property, phenomenon, degradation, method, parameter, processing, application, model).
-- **Normalisation** and **validation** functions for SIB concepts.
-- **Category mapping** and **hierarchy labels** for sunburst charts.
-- **Color mapping** for nodes and edges, now SIB‑specific.
-
-The code is **self‑contained** and runs exactly like the original MPEA version, but for sodium‑ion batteries. All visualisation modules (PyVis, Plotly 2D/3D, sunburst, radar, t‑SNE, community detection, etc.) are included, as are the batch‑processing controls and memory‑optimised caches.
-
-You can run it as is, placing your JSON/BibTeX/CSV files in the `json_metadatabase/` folder.
-
-```python
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
@@ -4712,4 +4692,4 @@ def render_reasoning_dashboard(nx_graph, valid_concepts, ontology, extractor):
 # ============================================================================
 if __name__ == "__main__":
     main()
-```
+
