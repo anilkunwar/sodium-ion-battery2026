@@ -3511,6 +3511,13 @@ def render_pyvis_graph(
     # --- Physics options ---
     if physics_enabled:
         net.toggle_physics(True)
+
+        # HOTFIX: Safely initialize the physics dict to prevent TypeError
+        # if pyvis leaves it as None or a non-dict type.
+        if not isinstance(net.options.get("physics"), dict):
+            net.options["physics"] = {}
+
+        net.options["physics"]["enabled"] = True
         net.options["physics"]["forceAtlas2Based"] = {
             "gravitationalConstant": physics_preset.get("gravity", -2500),
             "centralGravity": physics_preset.get("central_gravity", 0.25),
