@@ -3428,110 +3428,164 @@ _NODE_TYPE_COLORS = {
 
 
 def render_pyvis_graph(
-    graph: nx.Graph,
-    ontology: Optional["DomainOntology"] = None,
-    node_weights: Optional[Dict[str, float]] = None,
-    min_weight: float = 0.0,
-    label_style: str = "arrow",
-    show_edge_legend: bool = True,
-    height: str = "750px",
-    notebook: bool = False,
-) -> Network:
+    nx_graph,
+    concept_abstract_map,
+    physics_enabled=True,
+    cmap_name="viridis",
+    top_n_nodes=0,
+    theme=None,
+    physics_preset=None,
+    show_edge_weights=False,
+    edge_label_mode="hover",
+    node_label_size=12,
+    node_label_position="center",
+    node_font_face="Inter, Segoe UI, Roboto, sans-serif",
+    edge_label_size=10,
+    edge_label_color=None,
+    edge_label_position="middle",
+    use_abbreviated_labels=False,
+    max_label_length=15,
+    enable_node_highlight=False,
+    show_definitions=True,
+    ontology=None,
+) -> None:
     """
     Render the concept graph as an interactive Pyvis Network.
 
-    Improvements over the original:
-    - Edge **color** is determined by the RelationshipType stored in edge data.
-    - Edge **width** varies by relationship strength category.
-    - Edge **style** is dashed for inferred/weak relationships.
-    - Node **labels** show the hierarchy path (e.g. "Electrochemical → Specific Capacity").
-    - Node **size** scales with weight (frequency / importance).
-    - An HTML legend for edge colors is appended below the graph.
-
-    Parameters
-    ----------
-    graph : nx.Graph / nx.DiGraph
-    ontology : DomainOntology or None
-    node_weights : dict or None
-    min_weight : float
-    label_style : str  — "arrow", "bracket", "dot", or "leaf"
-    show_edge_legend : bool
-    height : str
-    notebook : bool
-
-    Returns
-    -------
-    pyvis.network.Network
+    Integrates:
+    - Edge coloring by RelationshipType (from edge data)
+    - Hierarchy labels for nodes (e.g. "Electrochemical Properties → Specific Capacity")
+    - Original features: physics, themes, node highlighting, abbreviated labels, edge labels
     """
+    if theme is None:
+        theme = THEME_PRESETS["Bright (Default)"]
+    if physics_preset is None:
+        physics_preset = PHYSICS_PRESETS["Stable (Default)"]
+
+    # --- Filter to top N nodes if requested ---
+    if top_n_nodes > 0 and len(nx_graph.nodes()) > top_n_nodes:
+        degrees = dict(nx_graph.degree())
+        top_nodes = sorted(degrees.keys(), key=lambda x: degrees[x], reverse=True)[:top_n_nodes]
+        nx_graph = nx_graph.subgraph(top_nodes).copy()
+
+    # --- Build abbreviated label mapping ---
+    label_map: Dict[str, str] = {}
+    reverse_label_map: Dict[str, str] = {}
+    if use_abbreviated_labels:
+        for i, node in enumerate(sorted(nx_graph.nodes())):
+            label = get_hierarchy_label(node, style="leaf")
+            if len(label) > max_label_length:
+                short_label = f"N{i+1}"
+                label_map[node] = short_label
+                reverse_label_map[short_label] = node
+            else:
+                label_map[node] = label
+    else:
+        for node in nx_graph.nodes():
+            label_map[node] = get_hierarchy_label(node, style="arrow")
+
+    # --- Determine edge label display mode ---
+    edge_weights_list = [
+        (u, v, nx_graph[u][v].get('weight', 1))
+        for u, v in nx_graph.edges()
+    ]
+    if edge_weights_list:
+        sorted_edges = sorted(edge_weights_list, key=lambda x: x[2], reverse=True)
+        threshold_idx = max(1, int(len(sorted_edges) * 0.2))
+        threshold_weight = sorted_edges[threshold_idx - 1][2] if threshold_idx <= len(sorted_edges) else 0
+    else:
+        threshold_weight = 0
+
+    # --- Create PyVis Network ---
     net = Network(
-        height=height,
+        height="750px",
         width="100%",
-        directed=graph.is_directed(),
-        bgcolor="#1a1a2e",
-        font_color="white",
+        directed=False,
+        bgcolor=theme.get("bg", "#ffffff"),
+        font_color=theme.get("font", "#000000"),
         select_menu=True,
         filter_menu=True,
+        cdn_resources="in_line",
     )
-    net.toggle_physics(True)
 
-    # Pre-compute weight range for node sizing
-    weights = [node_weights.get(n, 1.0) for n in graph.nodes if (node_weights or {}).get(n, 1.0) >= min_weight]
-    w_min = min(weights) if weights else 1.0
-    w_max = max(weights) if weights else 1.0
-    w_range = w_max - w_min if w_max > w_min else 1.0
+    # --- Physics options ---
+    if physics_enabled:
+        net.toggle_physics(True)
+        net.options["physics"]["forceAtlas2Based"] = {
+            "gravitationalConstant": physics_preset.get("gravity", -2500),
+            "centralGravity": physics_preset.get("central_gravity", 0.25),
+            "springLength": physics_preset.get("spring_length", 140),
+            "springConstant": physics_preset.get("spring_strength", 0.05),
+            "damping": physics_preset.get("damping", 0.55),
+        }
+        net.options["physics"]["solver"] = "forceAtlas2Based"
+        net.options["physics"]["stabilization"] = {
+            "enabled": True,
+            "iterations": physics_preset.get("stabilization", 2500),
+        }
+    else:
+        net.toggle_physics(False)
+
+    # --- Node colors by category ---
+    cmap_colors = get_colormap_colors(cmap_name, max(len(nx_graph.nodes()), 1))
 
     # --- Add nodes ---
-    for node in graph.nodes:
-        w = (node_weights or {}).get(node, 1.0)
-        if w < min_weight:
-            continue
+    for i, node in enumerate(nx_graph.nodes()):
+        freq = len(concept_abstract_map.get(node, []))
+        deg = nx_graph.degree(node)
+        concept_type = nx_graph.nodes[node].get('concept_type', 'general')
+        definition = nx_graph.nodes[node].get('definition', '')
 
-        # Determine concept type for color
-        ctype = ConceptType.GENERAL
+        # Color: use concept type color if ontology available, else colormap
         if ontology and node in ontology.concepts:
             ctype = ontology.concepts[node].concept_type
-        node_color = _NODE_TYPE_COLORS.get(ctype, "#95A5A6")
+            node_color = _NODE_TYPE_COLORS.get(ctype, "#95A5A6")
+        else:
+            node_color = get_sib_category_color(node, cmap_colors)
 
-        # Node size: 15–50 px proportional to weight
-        norm_w = (w - w_min) / w_range if w_range > 0 else 0.5
-        node_size = 15 + 35 * norm_w
+        # Size based on frequency
+        node_size = max(15, min(50, 15 + freq * 1.5))
 
-        # Hierarchy label
-        label = get_hierarchy_label(node, style=label_style)
+        # Label
+        display_label = label_map.get(node, node)
 
-        # Tooltip
-        tooltip_parts = [f"<b>{label}</b>"]
-        tooltip_parts.append(f"Type: {ctype.value}")
-        if w != 1.0:
-            tooltip_parts.append(f"Weight: {w:.1f}")
-        if ontology and node in ontology.concepts:
-            defn = ontology.concepts[node].definition
-            if defn:
-                tooltip_parts.append(f"<i>{defn[:120]}…</i>")
-        title = "<br/>".join(tooltip_parts)
+        # Tooltip / title
+        tooltip_lines = [f"<b>{node}</b>"]
+        if show_definitions and definition:
+            tooltip_lines.append(f"<i>{definition[:200]}</i>")
+        tooltip_lines.append(f"Type: {concept_type}")
+        tooltip_lines.append(f"Frequency: {freq}")
+        tooltip_lines.append(f"Degree: {deg}")
+        if use_abbreviated_labels and node in reverse_label_map:
+            tooltip_lines.append(f"Label: {reverse_label_map.get(display_label, display_label)}")
+        title = "<br/>".join(tooltip_lines)
 
         net.add_node(
             node,
-            label=label,
+            label=display_label,
             color=node_color,
             size=node_size,
             title=title,
-            borderWidth=1,
-            borderColor="#FFFFFF",
-            font={"size": 10 + int(4 * norm_w)},
+            borderWidth=2,
+            borderWidthSelected=4,
+            borderColor=theme.get("node_border", "#ffffff"),
+            font={
+                "size": node_label_size,
+                "face": node_font_face,
+                "color": theme.get("font", "#000000"),
+            },
         )
 
-    # --- Add edges with relationship-colored styling ---
-    # Track which relationship types were actually used (for legend)
-    used_rel_types: Dict[RelationshipType, str] = {}  # type → human label
+    # --- Add edges with relationship-type coloring ---
+    for u, v, data in nx_graph.edges(data=True):
+        weight = data.get('weight', 1)
+        cooccurrence = data.get('cooccurrence', 0)
+        semantic = data.get('semantic', 0)
+        edge_type = data.get('edge_type', 'cooccurrence')
+        inferred = data.get('inferred', False)
+        confidence = data.get('confidence', 1.0)
 
-    for u, v, data in graph.edges(data=True):
-        w_u = (node_weights or {}).get(u, 1.0)
-        w_v = (node_weights or {}).get(v, 1.0)
-        if w_u < min_weight or w_v < min_weight:
-            continue
-
-        # Resolve relationship type
+        # Resolve relationship type for coloring
         rel_type = data.get("rel_type", RelationshipType.SEMANTIC)
         if isinstance(rel_type, str):
             try:
@@ -3539,75 +3593,105 @@ def render_pyvis_graph(
             except ValueError:
                 rel_type = RelationshipType.SEMANTIC
 
-        color = get_edge_color(rel_type)
-        width = get_edge_width(rel_type)
-        style = get_edge_style(rel_type)
+        # Edge color by relationship type
+        edge_color = get_edge_color(rel_type)
+        # Edge width by strength category
+        edge_width = get_edge_width(rel_type)
+        # Edge style
+        edge_dashes = get_edge_style(rel_type) == "dashed"
+
+        # Determine if we show the weight label
+        show_label = False
+        label_text = ""
+        if show_edge_weights:
+            if edge_label_mode == "all":
+                show_label = True
+                label_text = f"{weight:.1f}"
+            elif edge_label_mode == "threshold":
+                if weight >= threshold_weight:
+                    show_label = True
+                    label_text = f"{weight:.1f}"
+            elif edge_label_mode == "hover":
+                show_label = False
 
         # Edge tooltip
-        confidence = data.get("confidence", 1.0)
-        evidence = data.get("evidence", "")
         edge_title = (
-            f"<b>{u}</b> ―[{rel_type.value}]―→ <b>{v}</b>"
-            f"<br/>Confidence: {confidence:.2f}"
+            f"<b>{u}</b> ↔ <b>{v}</b><br/>"
+            f"Weight: {weight:.2f}<br/>"
+            f"Co-occurrence: {cooccurrence}<br/>"
+            f"Semantic: {semantic:.2f}<br/>"
+            f"Type: {edge_type}<br/>"
+            f"Relationship: {rel_type.value}<br/>"
+            f"Inferred: {inferred}<br/>"
+            f"Confidence: {confidence:.2f}"
         )
-        if evidence:
-            edge_title += f"<br/><i>{evidence[:80]}</i>"
 
         net.add_edge(
             u, v,
-            color=color,
-            width=width,
-            style=style,
+            color=edge_color,
+            width=edge_width,
+            dashes=edge_dashes,
             title=edge_title,
-            arrows=graph.is_directed(),
-            smooth={"type": "continuous" if graph.is_directed() else "dynamic"},
+            label=label_text if show_label else "",
+            font={
+                "size": edge_label_size,
+                "color": edge_label_color or theme.get("font", "#000000"),
+                "align": edge_label_position,
+            } if show_label else None,
         )
 
-        # Record for legend
-        if rel_type not in used_rel_types:
-            human = rel_type.value.replace("_", " ").title()
-            used_rel_types[rel_type] = human
+    # --- Generate HTML with custom CSS/JS enhancements ---
+    html_content = net.generate_html(notebook=False)
 
-    # --- Edge-color legend (HTML injected via footer) ---
-    if show_edge_legend and used_rel_types:
-        legend_rows = []
-        for rt, human in sorted(used_rel_types.items(), key=lambda x: x[1]):
-            c = get_edge_color(rt)
-            w = get_edge_width(rt)
-            s = get_edge_style(rt)
-            border = 'border: 1px dashed #888;' if s == "dashed" else 'border: 1px solid transparent;'
-            legend_rows.append(
-                f'<tr>'
-                f'<td style="padding:2px 6px;">'
-                f'<span style="display:inline-block;width:{int(20*w)}px;height:3px;'
-                f'background:{c};vertical-align:middle;{border}"></span>'
-                f'</td>'
-                f'<td style="padding:2px 6px;color:#ccc;font-size:11px;">{human}</td>'
-                f'</tr>'
-            )
-        legend_html = (
-            '<div style="background:#0d0d1a;border-radius:8px;padding:12px 16px;'
-            f'margin-top:8px;max-height:280px;overflow-y:auto;">'
-            f'<div style="color:#fff;font-size:13px;font-weight:bold;margin-bottom:6px;">'
-            f'Edge Colors ({len(used_rel_types)} relationship types)</div>'
-            f'<table style="border-collapse:collapse;">{"".join(legend_rows)}</table>'
-            f'</div>'
-        )
-        # Pyvis doesn't have a native footer, so we embed via a hidden node trick
-        net.add_node(
-            "__legend__",
-            label="",
-            shape="dot",
-            size=0,
-            color="rgba(0,0,0,0)",
-            fixed=True,
-            x=-500,
-            y=-500,
-            physics=False,
-            title=legend_html,
-        )
+    # Inject custom CSS for glassmorphism tooltips
+    custom_css = f"""
+    <style>
+    .vis-network {{
+        outline: none !important;
+    }}
+    .vis-tooltip {{
+        background-color: {theme.get("tooltip_bg", "rgba(255,255,255,0.95)")} !important;
+        border: 1px solid {theme.get("tooltip_border", "#cbd5e1")} !important;
+        color: {theme.get("tooltip_text", "#1e293b")} !important;
+        border-radius: 8px !important;
+        padding: 8px 12px !important;
+        font-family: {node_font_face} !important;
+        font-size: 12px !important;
+        box-shadow: 0 4px 12px {theme.get("shadow_color", "rgba(0,0,0,0.15)")} !important;
+        max-width: 300px !important;
+    }}
+    </style>
+    """
+    if "</body>" in html_content:
+        html_content = html_content.replace("</body>", custom_css + "</body>")
+    elif "</html>" in html_content:
+        html_content = html_content.replace("</html>", custom_css + "</html>")
+    else:
+        html_content += custom_css
 
-    return net
+    # Write to temp file and display
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".html", delete=False, encoding="utf-8") as f:
+        f.write(html_content)
+        temp_path = f.name
+
+    try:
+        with open(temp_path, "r", encoding="utf-8") as f:
+            html_data = f.read()
+        st.components.v1.html(html_data, height=750, scrolling=False)
+    finally:
+        try:
+            os.remove(temp_path)
+        except Exception:
+            pass
+
+    # --- Abbreviated labels legend ---
+    if use_abbreviated_labels and reverse_label_map:
+        with st.expander("📋 Node Label Legend"):
+            legend_df = pd.DataFrame([
+                {"Short Label": short_label, "Full Concept": full_name}
+                for short_label, full_name in sorted(reverse_label_map.items())
+            ])
+            st.dataframe(legend_df, use_container_width=True)
 
 def render_graph_plotly_2d(
     nx_graph, concept_abstract_map, cmap_name="viridis",
