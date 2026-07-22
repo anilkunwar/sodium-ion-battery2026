@@ -3511,27 +3511,41 @@ def render_pyvis_graph(
     # --- Physics options ---
     if physics_enabled:
         net.toggle_physics(True)
-
-        # HOTFIX: Safely initialize the physics dict to prevent TypeError
-        # if pyvis leaves it as None or a non-dict type.
-        if not isinstance(net.options.get("physics"), dict):
-            net.options["physics"] = {}
-
-        net.options["physics"]["enabled"] = True
-        net.options["physics"]["forceAtlas2Based"] = {
-            "gravitationalConstant": physics_preset.get("gravity", -2500),
-            "centralGravity": physics_preset.get("central_gravity", 0.25),
-            "springLength": physics_preset.get("spring_length", 140),
-            "springConstant": physics_preset.get("spring_strength", 0.05),
-            "damping": physics_preset.get("damping", 0.55),
-        }
-        net.options["physics"]["solver"] = "forceAtlas2Based"
-        net.options["physics"]["stabilization"] = {
+        _physics_opts = {
             "enabled": True,
-            "iterations": physics_preset.get("stabilization", 2500),
+            "forceAtlas2Based": {
+                "gravitationalConstant": physics_preset.get("gravity", -2500),
+                "centralGravity": physics_preset.get("central_gravity", 0.25),
+                "springLength": physics_preset.get("spring_length", 140),
+                "springConstant": physics_preset.get("spring_strength", 0.05),
+                "damping": physics_preset.get("damping", 0.55),
+            },
+            "solver": "forceAtlas2Based",
+            "stabilization": {
+                "enabled": True,
+                "iterations": physics_preset.get("stabilization", 2500),
+            },
         }
     else:
         net.toggle_physics(False)
+        _physics_opts = {"enabled": False}
+
+    # Safely inject physics options (compatible with pyvis 0.3.x)
+    # In pyvis >= 0.3.2, net.options is a custom Options object, not a dict.
+    try:
+        if not isinstance(net.options, dict):
+            net.options = (
+                dict(net.options.__dict__)
+                if hasattr(net.options, "__dict__")
+                else {}
+            )
+        net.options["physics"] = _physics_opts
+    except Exception:
+        try:
+            import json as _json
+            net.set_options(_json.dumps({"physics": _physics_opts}))
+        except Exception:
+            pass  # Physics will use library defaults
 
     # --- Node colors by category ---
     cmap_colors = get_colormap_colors(cmap_name, max(len(nx_graph.nodes()), 1))
