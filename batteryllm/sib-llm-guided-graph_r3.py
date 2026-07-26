@@ -1,14 +1,14 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-SIB QUANTITATIVE DESCRIPTOR GRAPH v6.2 – LLM‑DIRECTED QUERY INTERFACE
+SIB QUANTITATIVE DESCRIPTOR GRAPH v6.2 – LLM‑GUIDED DYNAMIC ONTOLOGY
 ====================================================================
-Full integration of:
+Complete integration of:
 - v6.1: Memory‑safe batch processing, ontology, GNN, analytics, visualizations
-- NEW: LLM‑directed query analysis (local/OpenAI/fallback)
-- NEW: Ontology priority scoring (concept relevance, causal paths)
-- NEW: Priority‑guided subgraph extraction
-- NEW: Query‑driven visualization parameters
+- NEW: LLM‑directed query analysis (OpenAI/local/fallback)
+- NEW: Dynamic ontology expansion (add concepts, relationships, bridges)
+- NEW: Priority scoring and subgraph extraction
+- NEW: Query‑driven visualisation with highlighting
 
 USAGE:
     streamlit run sib_concept_graph.py
@@ -762,7 +762,7 @@ class SparseGraphSAGE(nn.Module):
         return pos_scores, neg_scores, h2
 
 # ============================================================================
-# QUERY ANALYSIS DATA CLASSES (NEW)
+# QUERY ANALYSIS DATA STRUCTURES (NEW)
 # ============================================================================
 @dataclass
 class ConceptPriority:
@@ -845,6 +845,7 @@ class FallbackAnalyzer(LLMQueryAnalyzer):
                                                 "slurry", "coating", "manufacturing", "dry room", "aqueous processing"},
     }
     def is_available(self) -> bool: return True
+
     @timed
     def analyze_query(self, query: str, ontology: DomainOntology) -> QueryAnalysisResult:
         q = query.lower().strip()
@@ -857,6 +858,8 @@ class FallbackAnalyzer(LLMQueryAnalyzer):
         else:
             primary = max(problem_scores, key=problem_scores.get)
         secondary = [p for p, s in sorted(problem_scores.items(), key=lambda x: -x[1]) if s > 0 and p != primary][:2]
+
+        # Explicitly mentioned concepts
         explicitly_mentioned = []
         for canonical, node in ontology.concepts.items():
             if canonical.replace("_", " ") in q:
@@ -866,364 +869,853 @@ class FallbackAnalyzer(LLMQueryAnalyzer):
                 if syn.replace("_", " ") in q:
                     explicitly_mentioned.append(canonical)
                     break
-        query_type = "question" if "?" in q or any(w in q for w in ["why","how","what"]) else "general"
-        if any(w in q for w in ["compare","vs","versus"]): query_type = "comparison"
-        if any(w in q for w in ["mechanism","process","how does"]): query_type = "mechanism"
-        if any(w in q for w in ["improve","optimize","enhance","strategy"]): query_type = "optimization"
-        emphasis = "solution" if query_type == "optimization" else "cause" if any(w in q for w in ["cause","reason","why"]) else "general"
+
+        # Infer additional concepts from problem definitions
         inferred = []
-        if primary in SIB_PROBLEM_DEFINITIONS:
-            for c in SIB_PROBLEM_DEFINITIONS[primary].key_concepts:
-                if c not in explicitly_mentioned and c in ontology.concepts:
-                    inferred.append(c)
-        return QueryAnalysisResult(
-            original_query=query, normalized_query=q,
-            primary_problem=primary, secondary_problems=secondary,
-            problem_confidences={p.value: s/max(sum(problem_scores.values()),1) for p,s in problem_scores.items()},
-            explicitly_mentioned=explicitly_mentioned, inferred_concepts=inferred,
-            all_relevant_concepts=explicitly_mentioned + inferred,
-            query_type=query_type, emphasis_direction=emphasis,
-            subgraph_depth=2, priority_threshold=0.3,
-            focus_nodes=explicitly_mentioned[:5],
-            reasoning_chain=[f"Rule-based: found {len(explicitly_mentioned)} explicit concepts"],
-            confidence=0.6 if explicitly_mentioned else 0.3
-        )
+        if primary != SIBCoreProblem.GENERAL:
+            problem_def = SIB_PROBLEM_DEFINITIONS[primary]
+            for concept in problem_def.key_concepts:
+                if concept not in explicitly_mentioned and concept in ontology.concepts:
+                    inferred.append(concept)
+            for concept in problem_def.relevant_materials:
+                if concept not in explicitly_mentioned and concept in ontology.concepts:
+                    inferred.append(concept)
+            for concept in problem_def.relevant_phenomena:
+                if concept not in explicitly_mentioned and concept in ontology.concepts:
+                    inferred.append(concept)
+            for concept in problem_def.relevant_properties:
+                if concept not in explicitly_mentioned and concept in ontology.concepts:
+                    inferred.append(concept)
 
-class LocalLLMAnalyzer(LLMQueryAnalyzer):
-    SYSTEM_PROMPT = """You are a scientific query analyzer for Sodium-Ion Battery (SIB) research.
-Given a user query, return JSON with:
-1. "primary_problem": one of "anode_bottleneck","cathode_instability","sei_chemistry","solid_state_interface","low_energy_density","moisture_manufacturing","general","multi_problem"
-2. "secondary_problems": list
-3. "query_type": "question","comparison","mechanism","optimization","general"
-4. "emphasis_direction": "cause","effect","solution","property","comparison"
-5. "key_concepts": list of canonical concept names
-6. "implicit_concepts": list
-7. "reasoning": brief explanation
-Only valid JSON."""
-    def __init__(self, model_name: str = "gpt2"):
-        self.model_name = model_name
-        self.tokenizer = None; self.model = None
-        try:
-            from transformers import AutoTokenizer, AutoModelForCausalLM
-            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-            self.model = AutoModelForCausalLM.from_pretrained(model_name)
-        except Exception:
-            pass
-    def is_available(self) -> bool:
-        return self.model is not None
-    @timed
-    def analyze_query(self, query: str, ontology: DomainOntology) -> QueryAnalysisResult:
-        if not self.is_available(): return FallbackAnalyzer().analyze_query(query, ontology)
-        prompt = f"{self.SYSTEM_PROMPT}\n\nUser Query: {query}\n\nAnalysis:"
-        inputs = self.tokenizer(prompt, return_tensors="pt", max_length=1024, truncation=True)
-        with torch.no_grad():
-            outputs = self.model.generate(**inputs, max_new_tokens=512, temperature=0.1, do_sample=False)
-        response = self.tokenizer.decode(outputs[0][inputs['input_ids'].shape[1]:], skip_special_tokens=True)
-        try:
-            json_match = re.search(r'\{.*\}', response, re.DOTALL)
-            data = json.loads(json_match.group()) if json_match else json.loads(response)
-        except:
-            data = {"primary_problem":"general", "query_type":"general", "key_concepts":[]}
-        problem_map = {"anode_bottleneck":SIBCoreProblem.ANODE_BOTTLENECK, "cathode_instability":SIBCoreProblem.CATHODE_INSTABILITY,
-                       "sei_chemistry":SIBCoreProblem.SEI_CHEMISTRY, "solid_state_interface":SIBCoreProblem.SOLID_STATE_INTERFACE,
-                       "low_energy_density":SIBCoreProblem.LOW_ENERGY_DENSITY, "moisture_manufacturing":SIBCoreProblem.MOISTURE_MANUFACTURING,
-                       "general":SIBCoreProblem.GENERAL, "multi_problem":SIBCoreProblem.MULTI_PROBLEM}
-        primary = problem_map.get(data.get("primary_problem","general"), SIBCoreProblem.GENERAL)
-        secondary = [problem_map.get(p, SIBCoreProblem.GENERAL) for p in data.get("secondary_problems", []) if p in problem_map]
-        explicit = [c for c in data.get("key_concepts", []) if ontology.resolve_concept(c)]
-        inferred = [c for c in data.get("implicit_concepts", []) if ontology.resolve_concept(c) and c not in explicit]
-        return QueryAnalysisResult(
-            original_query=query, normalized_query=query.lower(),
-            primary_problem=primary, secondary_problems=secondary,
-            problem_confidences={primary.value: 0.8},
-            explicitly_mentioned=explicit, inferred_concepts=inferred,
-            all_relevant_concepts=explicit + inferred,
-            query_type=data.get("query_type","general"),
-            emphasis_direction=data.get("emphasis_direction","cause"),
-            subgraph_depth=2, priority_threshold=0.3,
-            focus_nodes=explicit[:5],
-            reasoning_chain=[data.get("reasoning","")],
-            confidence=0.8
-        )
+        all_relevant = list(dict.fromkeys(explicitly_mentioned + inferred))
 
-class OpenAIAnalyzer(LLMQueryAnalyzer):
-    SYSTEM_PROMPT = LocalLLMAnalyzer.SYSTEM_PROMPT
-    def __init__(self, api_key: str = None, model: str = "gpt-3.5-turbo"):
-        self.api_key = api_key or os.environ.get("OPENAI_API_KEY")
-        self.model = model
-        self.client = None
-        if self.api_key:
-            try:
-                import openai
-                self.client = openai.OpenAI(api_key=self.api_key)
-            except: pass
-    def is_available(self) -> bool: return self.client is not None
-    @timed
-    def analyze_query(self, query: str, ontology: DomainOntology) -> QueryAnalysisResult:
-        if not self.is_available(): return FallbackAnalyzer().analyze_query(query, ontology)
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model, messages=[{"role":"system","content":self.SYSTEM_PROMPT},
-                                            {"role":"user","content":f"User Query: {query}"}],
-                temperature=0.1, max_tokens=512, response_format={"type":"json_object"}
-            )
-            data = json.loads(response.choices[0].message.content)
-        except:
-            return FallbackAnalyzer().analyze_query(query, ontology)
-        # same parsing as LocalLLMAnalyzer
-        problem_map = {"anode_bottleneck":SIBCoreProblem.ANODE_BOTTLENECK, "cathode_instability":SIBCoreProblem.CATHODE_INSTABILITY,
-                       "sei_chemistry":SIBCoreProblem.SEI_CHEMISTRY, "solid_state_interface":SIBCoreProblem.SOLID_STATE_INTERFACE,
-                       "low_energy_density":SIBCoreProblem.LOW_ENERGY_DENSITY, "moisture_manufacturing":SIBCoreProblem.MOISTURE_MANUFACTURING,
-                       "general":SIBCoreProblem.GENERAL, "multi_problem":SIBCoreProblem.MULTI_PROBLEM}
-        primary = problem_map.get(data.get("primary_problem","general"), SIBCoreProblem.GENERAL)
-        secondary = [problem_map.get(p, SIBCoreProblem.GENERAL) for p in data.get("secondary_problems", []) if p in problem_map]
-        explicit = [c for c in data.get("key_concepts", []) if ontology.resolve_concept(c)]
-        inferred = [c for c in data.get("implicit_concepts", []) if ontology.resolve_concept(c) and c not in explicit]
-        return QueryAnalysisResult(
-            original_query=query, normalized_query=query.lower(),
-            primary_problem=primary, secondary_problems=secondary,
-            problem_confidences={primary.value: 0.9},
-            explicitly_mentioned=explicit, inferred_concepts=inferred,
-            all_relevant_concepts=explicit + inferred,
-            query_type=data.get("query_type","general"),
-            emphasis_direction=data.get("emphasis_direction","cause"),
-            subgraph_depth=2, priority_threshold=0.3,
-            focus_nodes=explicit[:5],
-            reasoning_chain=[data.get("reasoning","")],
-            confidence=0.9
-        )
-
-class LLMAnalyzerFactory:
-    _instance = None
-    @classmethod
-    def get_analyzer(cls, mode: str = "rule_based", **kwargs) -> LLMQueryAnalyzer:
-        if mode == "openai":
-            return OpenAIAnalyzer(api_key=kwargs.get("api_key"), model=kwargs.get("api_model","gpt-3.5-turbo"))
-        elif mode == "local":
-            return LocalLLMAnalyzer(model_name=kwargs.get("model_name","gpt2"))
-        else:
-            return FallbackAnalyzer()
-
-# ============================================================================
-# ONTOLOGY PRIORITY SCORER (NEW)
-# ============================================================================
-class OntologyPriorityScorer:
-    WEIGHTS = {"direct":0.40, "problem_affinity":0.25, "causal_path":0.20, "centrality":0.05, "cooccurrence":0.10}
-    PROBLEM_CONCEPT_AFFINITY = {
-        SIBCoreProblem.ANODE_BOTTLENECK: {"hard_carbon":0.95, "alloying_anode":0.90, "intercalation_anode":0.85,
-                                          "sodium_metal":0.75, "specific_capacity":0.85, "coulombic_efficiency":0.80,
-                                          "volume_expansion":0.90, "sei_formation":0.60},
-        SIBCoreProblem.CATHODE_INSTABILITY: {"layered_oxide_cathode":0.95, "polyanionic_cathode":0.85,
-                                             "prussian_blue_analogue":0.80, "phase_transition":0.95,
-                                             "specific_capacity":0.80, "cycle_life":0.90, "voltage_plateau":0.75},
-        SIBCoreProblem.SEI_CHEMISTRY: {"sei_formation":0.95, "liquid_electrolyte":0.90, "interface_engineering":0.85,
-                                       "coulombic_efficiency":0.90, "cycle_life":0.85, "interface_resistance":0.80},
-        SIBCoreProblem.SOLID_STATE_INTERFACE: {"solid_electrolyte":0.95, "quasi_solid_electrolyte":0.85,
-                                               "dendrite_growth":0.90, "void_formation":0.85, "interfacial_resistance":0.90,
-                                               "ionic_conductivity":0.85},
-        SIBCoreProblem.LOW_ENERGY_DENSITY: {"energy_density":0.95, "specific_capacity":0.90, "voltage_plateau":0.90,
-                                            "full_cell":0.85, "hard_carbon":0.75, "sodium_metal":0.80},
-        SIBCoreProblem.MOISTURE_MANUFACTURING: {"slurry_coating":0.95, "layered_oxide_cathode":0.80,
-                                                "coulombic_efficiency":0.70, "cycle_life":0.65},
-        SIBCoreProblem.GENERAL: {}, SIBCoreProblem.MULTI_PROBLEM: {}
-    }
-    def __init__(self, ontology: DomainOntology):
-        self.ontology = ontology
-        self._precompute_centrality()
-
-    def _precompute_centrality(self):
-        G = nx.DiGraph()
-        for rel in self.ontology.relationships:
-            G.add_edge(rel.source, rel.target, weight=rel.confidence)
-        try:
-            self.centrality = nx.pagerank(G, weight='weight')
-        except:
-            self.centrality = nx.degree_centrality(G)
-        if self.centrality:
-            max_c = max(self.centrality.values()) or 1
-            self.centrality = {k: v/max_c for k, v in self.centrality.items()}
-
-    @timed
-    def score_all_concepts(self, analysis: QueryAnalysisResult) -> Dict[str, ConceptPriority]:
+        # Build priority scores
         priorities = {}
-        mentioned = set(analysis.explicitly_mentioned)
-        for concept_name, node in self.ontology.concepts.items():
-            direct = 1.0 if concept_name in mentioned else (0.6 if concept_name in analysis.inferred_concepts else 0.0)
-            is_explicit = concept_name in mentioned
-            problem_aff = self.PROBLEM_CONCEPT_AFFINITY.get(analysis.primary_problem, {}).get(concept_name, 0.1)
-            causal = self._causal_path_score(concept_name, analysis.explicitly_mentioned, analysis.emphasis_direction)
-            cent = self.centrality.get(concept_name, 0.0)
-            cooc = 0.0
-            composite = (self.WEIGHTS["direct"]*direct + self.WEIGHTS["problem_affinity"]*problem_aff +
-                         self.WEIGHTS["causal_path"]*causal + self.WEIGHTS["centrality"]*cent +
-                         self.WEIGHTS["cooccurrence"]*cooc)
-            inference_reason = ""
-            if not is_explicit and composite > 0.3:
-                if problem_aff > 0.5: inference_reason = f"High affinity to {analysis.primary_problem.value}"
-                elif causal > 0.3: inference_reason = "On causal path"
-            priorities[concept_name] = ConceptPriority(
-                concept_name=concept_name, concept_type=node.concept_type,
-                composite_score=composite, direct_score=direct,
-                problem_affinity_score=problem_aff, causal_path_score=causal,
-                centrality_bonus=cent, cooccurrence_bonus=cooc,
+        problem_def = SIB_PROBLEM_DEFINITIONS.get(primary, SIB_PROBLEM_DEFINITIONS[SIBCoreProblem.GENERAL])
+        problem_concept_set = problem_def.get_ontology_concepts()
+
+        for concept in all_relevant:
+            is_explicit = concept in explicitly_mentioned
+            direct_score = 1.0 if is_explicit else 0.6
+            problem_affinity = 1.0 if concept in problem_concept_set else 0.4
+            causal_score = 0.5
+            for rel in ontology.relationships:
+                if rel.source == concept or rel.target == concept:
+                    if rel.source in problem_concept_set and rel.target in problem_concept_set:
+                        causal_score = max(causal_score, rel.confidence)
+            composite = (direct_score * 0.35 + problem_affinity * 0.35 +
+                         causal_score * 0.20 + 0.10)
+            priorities[concept] = ConceptPriority(
+                concept_name=concept,
+                concept_type=ontology.get_concept_type(concept),
+                composite_score=composite,
+                direct_score=direct_score,
+                problem_affinity_score=problem_affinity,
+                causal_path_score=causal_score,
+                centrality_bonus=0.0,
+                cooccurrence_bonus=0.0,
                 is_explicitly_mentioned=is_explicit,
-                is_inferred=(not is_explicit and composite > 0.3),
-                inference_reason=inference_reason
+                is_inferred=not is_explicit,
+                inference_reason="problem_affinity" if not is_explicit else "explicit_mention"
             )
-        return priorities
 
-    def _causal_path_score(self, concept: str, mentioned: List[str], emphasis: str) -> float:
-        if not mentioned: return 0.0
-        valuable = {RelationshipType.CAUSES, RelationshipType.DRIVES, RelationshipType.INFLUENCES,
-                    RelationshipType.ENABLES} if emphasis in ("cause","solution") else \
-                   {RelationshipType.RESULTS_IN, RelationshipType.FORMS, RelationshipType.GENERATES}
-        max_score = 0.0
-        for m in mentioned:
-            for rel in self.ontology.relationships:
-                if (rel.source == concept and rel.target == m) or (rel.target == concept and rel.source == m):
-                    if rel.rel_type in valuable:
-                        max_score = max(max_score, rel.confidence * 0.8)
-                    else:
-                        max_score = max(max_score, rel.confidence * 0.3)
-        return min(max_score, 1.0)
+        # Detect query type
+        query_type = "general"
+        emphasis = "cause"
+        comparison_pairs = []
+        if any(w in q for w in ["compare", "vs", "versus", "difference", "contrast", "between"]):
+            query_type = "comparison"
+            emphasis = "neutral"
+            mentioned = [c.replace("_", " ") for c in explicitly_mentioned]
+            for i in range(len(mentioned)):
+                for j in range(i + 1, len(mentioned)):
+                    comparison_pairs.append((mentioned[i], mentioned[j]))
+        elif any(w in q for w in ["why", "cause", "reason", "lead to", "result in", "due to"]):
+            query_type = "causal"
+            emphasis = "cause"
+        elif any(w in q for w in ["how", "improve", "enhance", "optimize", "strategy", "solution", "approach"]):
+            query_type = "solution"
+            emphasis = "effect"
+        elif any(w in q for w in ["what is", "define", "describe", "explain", "meaning"]):
+            query_type = "definition"
+            emphasis = "neutral"
 
-# ============================================================================
-# PRIORITY SUBGRAPH EXTRACTOR (NEW)
-# ============================================================================
-class PrioritySubgraphExtractor:
-    def __init__(self, ontology: DomainOntology):
-        self.ontology = ontology
+        # Build highlight paths from problem key_relationships
+        highlight_paths = []
+        if primary != SIBCoreProblem.GENERAL:
+            for src, rel_str, tgt in problem_def.key_relationships:
+                src_resolved = ontology.resolve_concept(src)
+                tgt_resolved = ontology.resolve_concept(tgt)
+                if src_resolved and tgt_resolved:
+                    highlight_paths.append([src_resolved, tgt_resolved])
+
+        # Reasoning chain
+        reasoning = [f"Query normalized: '{q}'"]
+        reasoning.append(f"Primary problem identified: {primary.value} (score: {problem_scores.get(primary, 0)})")
+        if secondary:
+            reasoning.append(f"Secondary problems: {[p.value for p in secondary]}")
+        reasoning.append(f"Explicitly mentioned concepts: {len(explicitly_mentioned)}")
+        reasoning.append(f"Inferred concepts from problem context: {len(inferred)}")
+        reasoning.append(f"Query type: {query_type}, emphasis: {emphasis}")
+
+        # Normalize problem scores
+        total = max(sum(problem_scores.values()), 1)
+        problem_confidences = {p.value: s / total for p, s in problem_scores.items()}
+
+        return QueryAnalysisResult(
+            original_query=query,
+            normalized_query=q,
+            primary_problem=primary,
+            secondary_problems=secondary,
+            problem_confidences=problem_confidences,
+            explicitly_mentioned=explicitly_mentioned,
+            inferred_concepts=inferred,
+            all_relevant_concepts=all_relevant,
+            concept_priorities=priorities,
+            query_type=query_type,
+            emphasis_direction=emphasis,
+            comparison_pairs=comparison_pairs,
+            subgraph_depth=2,
+            priority_threshold=0.3,
+            focus_nodes=explicitly_mentioned[:5],
+            bridge_nodes=inferred[:3],
+            suggested_layout="force" if query_type != "comparison" else "bisected",
+            highlight_paths=highlight_paths,
+            visualization_focus=problem_def.visualization_focus,
+            reasoning_chain=reasoning,
+            confidence=min(sum(problem_scores.values()) / 3.0, 1.0),
+        )
+
+class OpenAIQueryAnalyzer(LLMQueryAnalyzer):
+    """Uses OpenAI API for sophisticated query understanding."""
+
+    SYSTEM_PROMPT = """You are an expert Sodium-Ion Battery (SIB) researcher. Analyze the user's query and return a JSON object with:
+
+1. "primary_problem": One of: anode_bottleneck, cathode_instability, sei_chemistry, solid_state_interface, low_energy_density, moisture_manufacturing, general, multi_problem
+2. "secondary_problems": List of problem IDs (can be empty)
+3. "explicitly_mentioned": List of canonical concept names from the query (use snake_case)
+4. "inferred_concepts": List of additional relevant concepts the query implies but doesn't explicitly mention
+5. "query_type": One of: causal, comparison, solution, definition, general
+6. "emphasis_direction": One of: cause, effect, neutral
+7. "comparison_pairs": List of [concept1, concept2] pairs if this is a comparison query
+8. "highlight_paths": List of [source, target] concept pairs that should be highlighted in the graph
+9. "reasoning_chain": List of strings explaining your analysis steps
+10. "new_concepts": List of objects with "name" (snake_case), "type" (material/property/phenomenon/process/method/parameter), "definition", "synonyms" (list), "relate_to" (list of [target_concept, relationship_type, confidence])
+11. "new_relationships": List of [source, relationship_type, target, confidence] for relationships between EXISTING concepts that should be added
+
+Available relationship types: causes, influences, depends_on, constrains, stabilizes, reduces, improves, enables, detects, measures, observes, processes, forms, transitions_to, replaces, part_of, has_part
+
+Be thorough and scientifically accurate. For new_concepts, only propose concepts that are genuinely novel to the ontology and relevant to the query."""
+
+    def __init__(self, api_key: str = None, model: str = "gpt-4o-mini") -> None:
+        self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
+        self.model = model
+        self._client = None
+
+    def _get_client(self):
+        if self._client is None and self.api_key:
+            try:
+                from openai import OpenAI
+                self._client = OpenAI(api_key=self.api_key)
+            except ImportError:
+                st.warning("openai package not installed. pip install openai")
+                return None
+        return self._client
+
+    def is_available(self) -> bool:
+        return bool(self.api_key) and self._get_client() is not None
 
     @timed
-    def extract(self, analysis: QueryAnalysisResult, max_nodes: int = 30,
-                min_priority: float = 0.2) -> nx.DiGraph:
-        G = nx.DiGraph()
-        priorities = analysis.concept_priorities
-        seed = [n for n, cp in priorities.items() if cp.composite_score >= min_priority]
-        seed.sort(key=lambda n: priorities[n].composite_score, reverse=True)
-        seed = seed[:max_nodes]
-        expanded = set(seed)
-        frontier = deque(seed)
-        depth_map = {n: 0 for n in seed}
-        while frontier and len(expanded) < max_nodes * 1.5:
-            current = frontier.popleft()
-            if depth_map[current] >= analysis.subgraph_depth: continue
-            for rel in self.ontology.relationships:
-                neighbor = None
-                if rel.source == current: neighbor = rel.target
-                elif rel.target == current: neighbor = rel.source
-                if neighbor and neighbor not in expanded:
-                    cp = priorities.get(neighbor, ConceptPriority(neighbor, ConceptType.GENERAL, 0.0,0.0,0.0,0.0,0.0,0.0,False,False))
-                    decay = 0.5 ** (depth_map[current] + 1)
-                    effective = cp.composite_score * decay + priorities[current].composite_score * rel.confidence * decay
-                    if effective >= min_priority * 0.5 or neighbor in seed:
-                        expanded.add(neighbor)
-                        depth_map[neighbor] = depth_map[current] + 1
-                        frontier.append(neighbor)
-        for node in expanded:
-            if node in self.ontology.concepts:
-                n = self.ontology.concepts[node]
-                p = priorities.get(node)
-                G.add_node(node, concept_type=n.concept_type.value, definition=n.definition,
-                           priority=p.composite_score if p else 0.0,
-                           is_focus=node in analysis.focus_nodes)
-        for rel in self.ontology.relationships:
-            if rel.source in G.nodes and rel.target in G.nodes:
-                G.add_edge(rel.source, rel.target, rel_type=rel.rel_type.value,
-                           confidence=rel.confidence, color=get_edge_color(rel.rel_type),
-                           width=get_edge_width(rel.rel_type), style=get_edge_style(rel.rel_type))
-        return G
+    def analyze_query(self, query: str, ontology: DomainOntology) -> QueryAnalysisResult:
+        client = self._get_client()
+        if client is None:
+            return FallbackAnalyzer().analyze_query(query, ontology)
+
+        # Provide ontology context
+        concept_list = list(ontology.concepts.keys())
+        concept_summary = ", ".join(concept_list[:50])
+        if len(concept_list) > 50:
+            concept_summary += f" ... and {len(concept_list) - 50} more"
+
+        user_prompt = f"""Analyze this SIB query: "{query}"
+
+Available ontology concepts: {concept_summary}
+
+Return ONLY valid JSON matching the schema described."""
+
+        try:
+            response = client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": self.SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.1,
+                max_tokens=2000,
+                response_format={"type": "json_object"}
+            )
+            raw = response.choices[0].message.content
+            parsed = json.loads(raw)
+            return self._parse_llm_response(parsed, query, ontology)
+
+        except Exception as e:
+            st.warning(f"OpenAI analysis failed ({e}), falling back to rule-based")
+            return FallbackAnalyzer().analyze_query(query, ontology)
+
+    def _parse_llm_response(self, parsed: Dict, query: str,
+                            ontology: DomainOntology) -> QueryAnalysisResult:
+        problem_map = {p.value: p for p in SIBCoreProblem}
+        primary = problem_map.get(parsed.get("primary_problem", "general"), SIBCoreProblem.GENERAL)
+        secondary = [problem_map.get(p, SIBCoreProblem.GENERAL)
+                     for p in parsed.get("secondary_problems", [])]
+
+        # Filter concepts to those in ontology
+        explicitly_mentioned = [c for c in parsed.get("explicitly_mentioned", [])
+                                if c in ontology.concepts]
+        inferred = [c for c in parsed.get("inferred_concepts", [])
+                    if c in ontology.concepts and c not in explicitly_mentioned]
+        all_relevant = list(dict.fromkeys(explicitly_mentioned + inferred))
+
+        # Build priorities
+        priorities = {}
+        problem_def = SIB_PROBLEM_DEFINITIONS.get(primary, SIB_PROBLEM_DEFINITIONS[SIBCoreProblem.GENERAL])
+        problem_concept_set = problem_def.get_ontology_concepts()
+
+        for concept in all_relevant:
+            is_explicit = concept in explicitly_mentioned
+            priorities[concept] = ConceptPriority(
+                concept_name=concept,
+                concept_type=ontology.get_concept_type(concept),
+                composite_score=0.9 if is_explicit else 0.6,
+                direct_score=1.0 if is_explicit else 0.5,
+                problem_affinity_score=1.0 if concept in problem_concept_set else 0.5,
+                causal_path_score=0.7,
+                centrality_bonus=0.0,
+                cooccurrence_bonus=0.0,
+                is_explicitly_mentioned=is_explicit,
+                is_inferred=not is_explicit,
+                inference_reason="llm_inferred" if not is_explicit else "llm_explicit"
+            )
+
+        comparison_pairs = []
+        for pair in parsed.get("comparison_pairs", []):
+            if len(pair) == 2:
+                comparison_pairs.append(tuple(pair))
+
+        highlight_paths = []
+        for path in parsed.get("highlight_paths", []):
+            if len(path) == 2:
+                resolved_s = ontology.resolve_concept(path[0])
+                resolved_t = ontology.resolve_concept(path[1])
+                if resolved_s and resolved_t:
+                    highlight_paths.append([resolved_s, resolved_t])
+
+        # Store new concepts/relationships for ontology expansion
+        self._pending_new_concepts = parsed.get("new_concepts", [])
+        self._pending_new_relationships = parsed.get("new_relationships", [])
+
+        reasoning = parsed.get("reasoning_chain", ["LLM analysis completed"])
+
+        return QueryAnalysisResult(
+            original_query=query,
+            normalized_query=query.lower().strip(),
+            primary_problem=primary,
+            secondary_problems=secondary,
+            problem_confidences={},
+            explicitly_mentioned=explicitly_mentioned,
+            inferred_concepts=inferred,
+            all_relevant_concepts=all_relevant,
+            concept_priorities=priorities,
+            query_type=parsed.get("query_type", "general"),
+            emphasis_direction=parsed.get("emphasis_direction", "cause"),
+            comparison_pairs=comparison_pairs,
+            subgraph_depth=2,
+            priority_threshold=0.3,
+            focus_nodes=explicitly_mentioned[:5],
+            bridge_nodes=inferred[:3],
+            suggested_layout="bisected" if comparison_pairs else "force",
+            highlight_paths=highlight_paths,
+            visualization_focus=problem_def.visualization_focus,
+            reasoning_chain=reasoning,
+            confidence=0.85,
+        )
+
+class LocalLLMQueryAnalyzer(LLMQueryAnalyzer):
+    """Uses a local HuggingFace model for query analysis (no API key needed)."""
+
+    def __init__(self, model_name: str = "mistralai/Mistral-7B-Instruct-v0.2") -> None:
+        self.model_name = model_name
+        self._pipeline = None
+        self._loaded = False
+
+    def _load_model(self):
+        if self._loaded:
+            return
+        try:
+            from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+            import torch
+            tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+            model = AutoModelForCausalLM.from_pretrained(
+                self.model_name,
+                torch_dtype=torch.float16,
+                device_map="auto",
+                load_in_8bit=True,
+            )
+            self._pipeline = pipeline(
+                "text-generation",
+                model=model,
+                tokenizer=tokenizer,
+                max_new_tokens=1500,
+                temperature=0.1,
+            )
+            self._loaded = True
+        except Exception as e:
+            st.warning(f"Failed to load local model: {e}")
+            self._loaded = False
+
+    def is_available(self) -> bool:
+        self._load_model()
+        return self._loaded
+
+    @timed
+    def analyze_query(self, query: str, ontology: DomainOntology) -> QueryAnalysisResult:
+        if not self.is_available():
+            return FallbackAnalyzer().analyze_query(query, ontology)
+
+        prompt = f"""[INST] You are an SIB expert. Analyze: "{query}"
+Return JSON with: primary_problem (anode_bottleneck|cathode_instability|sei_chemistry|solid_state_interface|low_energy_density|moisture_manufacturing|general), explicitly_mentioned (list of snake_case concept names), inferred_concepts (list), query_type (causal|comparison|solution|definition|general), new_concepts (list of objects with name, type, definition, synonyms, relate_to), new_relationships (list of [source, rel_type, target, confidence]).
+Only valid JSON. [/INST]"""
+
+        try:
+            result = self._pipeline(prompt)[0]["generated_text"]
+            json_match = re.search(r'\{.*\}', result, re.DOTALL)
+            if json_match:
+                parsed = json.loads(json_match.group())
+                # Delegate to OpenAI parser (same format)
+                fake_openai = OpenAIQueryAnalyzer()
+                return fake_openai._parse_llm_response(parsed, query, ontology)
+        except Exception as e:
+            st.warning(f"Local LLM parsing failed: {e}")
+
+        return FallbackAnalyzer().analyze_query(query, ontology)
 
 # ============================================================================
-# QUERY VISUALIZATION DRIVER (NEW)
+# LLM QUERY ANALYZER FACTORY
 # ============================================================================
-class QueryVisualizationDriver:
-    TYPE_COLORS = {"material":"#4CAF50", "property":"#2196F3", "phenomenon":"#FF9800",
-                   "method":"#9C27B0", "process":"#00BCD4", "parameter":"#795548",
-                   "model":"#607D8B", "general":"#9E9E9E"}
-    LAYOUT_HEURISTICS = {"comparison":"bipartite", "mechanism":"hierarchical",
-                         "optimization":"radial", "question":"force", "general":"force"}
+class LLMQueryAnalyzerFactory:
+    def __init__(self) -> None:
+        self._openai_cache: Optional[OpenAIQueryAnalyzer] = None
+        self._local_cache: Optional[LocalLLMQueryAnalyzer] = None
+        self._fallback = FallbackAnalyzer()
 
-    def __init__(self, ontology: DomainOntology):
+    def get_analyzer(self, mode: str = "auto",
+                     api_key: str = None,
+                     local_model: str = None) -> LLMQueryAnalyzer:
+        if mode == "openai":
+            if self._openai_cache is None:
+                self._openai_cache = OpenAIQueryAnalyzer(api_key=api_key)
+            return self._openai_cache
+        elif mode == "local":
+            if self._local_cache is None:
+                model = local_model or "mistralai/Mistral-7B-Instruct-v0.2"
+                self._local_cache = LocalLLMQueryAnalyzer(model)
+            return self._local_cache
+        elif mode == "fallback":
+            return self._fallback
+        else:  # auto
+            if self._openai_cache is None:
+                self._openai_cache = OpenAIQueryAnalyzer(api_key=api_key)
+            if self._openai_cache.is_available():
+                return self._openai_cache
+            if self._local_cache is None:
+                model = local_model or "mistralai/Mistral-7B-Instruct-v0.2"
+                self._local_cache = LocalLLMQueryAnalyzer(model)
+            if self._local_cache.is_available():
+                return self._local_cache
+            return self._fallback
+
+# ============================================================================
+# ★★★ DYNAMIC ONTOLOGY EXPANDER ★★★
+# ============================================================================
+class DynamicOntologyExpander:
+    REL_STR_TO_ENUM: Dict[str, RelationshipType] = {r.value: r for r in RelationshipType}
+    for _k, _v in list(REL_STR_TO_ENUM.items()):
+        REL_STR_TO_ENUM[_k.upper()] = _v
+
+    TYPE_STR_TO_ENUM: Dict[str, ConceptType] = {t.value: t for t in ConceptType}
+
+    def __init__(self, ontology: DomainOntology) -> None:
         self.ontology = ontology
+        self.mutation_log: List[Dict[str, Any]] = []
+        self.session_concepts_added: Set[str] = set()
+        self.session_relationships_added: List[Tuple[str, str, RelationshipType, float]] = []
+        self.query_bridge_concepts: Dict[str, str] = {}
+        self.priority_overrides: Dict[str, float] = {}
+        self._base_concept_count: int = len(ontology.concepts)
+        self._base_rel_count: int = len(ontology.relationships)
 
-    def get_node_visual_params(self, subgraph: nx.DiGraph, analysis: QueryAnalysisResult) -> Dict:
-        params = {}
-        priorities = [data.get("priority",0) for _, data in subgraph.nodes(data=True)]
-        min_p, max_p = min(priorities) if priorities else (0,1)
-        p_range = max_p - min_p or 1
-        for node, data in subgraph.nodes(data=True):
-            priority = data.get("priority",0)
-            norm = (priority - min_p) / p_range
-            base = self.TYPE_COLORS.get(data.get("concept_type","general"), "#9E9E9E")
-            if data.get("is_focus", False):
-                color = lighten_hex_color(base, 0.3); size = 30 + norm*40; border=3; border_color="#FFD700"
+    @property
+    def stats(self) -> Dict[str, int]:
+        return {
+            "base_concepts": self._base_concept_count,
+            "base_relationships": self._base_rel_count,
+            "concepts_added": len(self.session_concepts_added),
+            "relationships_added": len(self.session_relationships_added),
+            "bridge_concepts": len(self.query_bridge_concepts),
+            "priority_overrides": len(self.priority_overrides),
+            "total_mutations": len(self.mutation_log),
+        }
+
+    def apply_query_analysis(self, analysis: QueryAnalysisResult,
+                             analyzer: LLMQueryAnalyzer = None) -> Dict[str, Any]:
+        changes = {"concepts_added": [], "relationships_added": [], "bridges_created": []}
+
+        # 1. Priority overrides
+        for concept_name, priority in analysis.concept_priorities.items():
+            if concept_name in self.ontology.concepts:
+                self.priority_overrides[concept_name] = priority.composite_score
+
+        # 2. Extract new concepts & relationships from LLM
+        new_concepts_raw = []
+        new_rels_raw = []
+        if isinstance(analyzer, OpenAIQueryAnalyzer):
+            new_concepts_raw = getattr(analyzer, '_pending_new_concepts', [])
+            new_rels_raw = getattr(analyzer, '_pending_new_relationships', [])
+        elif isinstance(analyzer, LocalLLMQueryAnalyzer):
+            new_concepts_raw = getattr(analyzer, '_pending_new_concepts', [])
+            new_rels_raw = getattr(analyzer, '_pending_new_relationships', [])
+
+        for concept_data in new_concepts_raw:
+            result = self._add_concept_from_llm(concept_data, analysis.original_query)
+            if result:
+                changes["concepts_added"].append(result)
+
+        for rel_data in new_rels_raw:
+            result = self._add_relationship_from_llm(rel_data, analysis.original_query)
+            if result:
+                changes["relationships_added"].append(result)
+
+        # 3. Bridge concepts for inferred but missing
+        for concept in analysis.inferred_concepts:
+            if concept not in self.ontology.concepts:
+                bridge_result = self._create_bridge_concept(
+                    concept, analysis.original_query, analysis.primary_problem
+                )
+                if bridge_result:
+                    changes["bridges_created"].append(bridge_result)
+
+        self.ontology._build_synonym_index()
+        return changes
+
+    def _add_concept_from_llm(self, concept_data: Dict, source_query: str) -> Optional[Dict]:
+        name = concept_data.get("name", "").strip().lower().replace(" ", "_")
+        if not name or name in self.ontology.concepts or name in self.session_concepts_added:
+            return None
+        type_str = concept_data.get("type", "general")
+        concept_type = self.TYPE_STR_TO_ENUM.get(type_str, ConceptType.GENERAL)
+        synonyms = set()
+        for syn in concept_data.get("synonyms", []):
+            if isinstance(syn, str):
+                synonyms.add(syn.lower().strip())
+        definition = concept_data.get("definition", f"LLM-inferred concept from query: {source_query}")
+        self.ontology._add_concept(name, concept_type, synonyms=synonyms, definition=definition)
+        self.ontology.synonym_to_canonical[name.lower()] = name
+        for syn in synonyms:
+            self.ontology.synonym_to_canonical[syn] = name
+        self.session_concepts_added.add(name)
+        for rel_tuple in concept_data.get("relate_to", []):
+            if len(rel_tuple) >= 2:
+                target = rel_tuple[0]
+                rel_type_str = rel_tuple[1] if len(rel_tuple) > 1 else "influences"
+                conf = rel_tuple[2] if len(rel_tuple) > 2 else 0.7
+                rel_enum = self.REL_STR_TO_ENUM.get(rel_type_str, RelationshipType.INFLUENCES)
+                if target in self.ontology.concepts:
+                    self.ontology._add_relationship(name, rel_enum, target, float(conf))
+                    self.session_relationships_added.append((name, target, rel_enum, float(conf)))
+        mutation = {"type":"add_concept","concept":name,"concept_type":concept_type.value,
+                    "synonyms":list(synonyms),"definition":definition,
+                    "source_query":source_query,"timestamp":datetime.now().isoformat()}
+        self.mutation_log.append(mutation)
+        return {"name":name, "type":concept_type.value, "synonyms":list(synonyms)}
+
+    def _add_relationship_from_llm(self, rel_data: List, source_query: str) -> Optional[Dict]:
+        if len(rel_data) < 3:
+            return None
+        source = str(rel_data[0]).strip().lower().replace(" ", "_")
+        rel_type_str = str(rel_data[1]).upper()
+        target = str(rel_data[2]).strip().lower().replace(" ", "_")
+        confidence = float(rel_data[3]) if len(rel_data) > 3 else 0.7
+        if source not in self.ontology.concepts or target not in self.ontology.concepts:
+            return None
+        for existing in self.ontology.relationships:
+            if (existing.source == source and existing.target == target and
+                    existing.rel_type.value == rel_type_str.lower()):
+                return None
+        rel_enum = self.REL_STR_TO_ENUM.get(rel_type_str, RelationshipType.INFLUENCES)
+        self.ontology._add_relationship(source, rel_enum, target, confidence)
+        self.session_relationships_added.append((source, target, rel_enum, confidence))
+        mutation = {"type":"add_relationship","source":source,"target":target,
+                    "rel_type":rel_enum.value,"confidence":confidence,
+                    "source_query":source_query,"timestamp":datetime.now().isoformat()}
+        self.mutation_log.append(mutation)
+        return {"source":source, "target":target, "rel_type":rel_enum.value, "confidence":confidence}
+
+    def _create_bridge_concept(self, missing_concept: str, source_query: str,
+                                problem: SIBCoreProblem) -> Optional[Dict]:
+        bridge_name = f"query_bridge_{missing_concept.replace(' ', '_').lower()}"
+        if bridge_name in self.ontology.concepts:
+            return None
+        problem_def = SIB_PROBLEM_DEFINITIONS.get(problem, SIB_PROBLEM_DEFINITIONS[SIBCoreProblem.GENERAL])
+        self.ontology._add_concept(
+            bridge_name, ConceptType.GENERAL,
+            synonyms={missing_concept.lower()},
+            definition=f"Query-inferred bridge concept: '{missing_concept}' (from query about {problem.value})"
+        )
+        self.ontology.synonym_to_canonical[bridge_name] = bridge_name
+        self.ontology.synonym_to_canonical[missing_concept.lower()] = bridge_name
+        connected = []
+        for key_concept in problem_def.key_concepts[:3]:
+            if key_concept in self.ontology.concepts:
+                self.ontology._add_relationship(bridge_name, RelationshipType.BRIDGE, key_concept, 0.5)
+                self.session_relationships_added.append((bridge_name, key_concept, RelationshipType.BRIDGE, 0.5))
+                connected.append(key_concept)
+        self.session_concepts_added.add(bridge_name)
+        self.query_bridge_concepts[bridge_name] = source_query
+        mutation = {"type":"create_bridge","bridge_name":bridge_name,"original_term":missing_concept,
+                    "connected_to":connected,"source_query":source_query,"timestamp":datetime.now().isoformat()}
+        self.mutation_log.append(mutation)
+        return {"bridge":bridge_name, "for":missing_concept, "connected_to":connected}
+
+    def get_priority_boosted_scores(self, base_priorities: Dict[str, ConceptPriority]
+                                    ) -> Dict[str, ConceptPriority]:
+        boosted = {}
+        for name, priority in base_priorities.items():
+            boost = self.priority_overrides.get(name, 0.0)
+            if boost > 0:
+                boosted_priority = copy.deepcopy(priority)
+                boosted_priority.composite_score = min(boosted_priority.composite_score + boost * 0.2, 1.0)
+                boosted_priority.centrality_bonus = boost * 0.2
+                boosted[name] = boosted_priority
             else:
-                color = base; size = 20 + norm*30; border=2; border_color="#888"
-            params[node] = {"color":color, "size":size, "border_width":border,
-                            "border_color":border_color,
-                            "label":node.replace("_"," ").title(),
-                            "title":f"{node.replace('_',' ').title()}\nPriority: {priority:.2f}",
-                            "opacity":0.5 + norm*0.5}
-        return params
+                boosted[name] = priority
+        return boosted
 
-    def get_edge_visual_params(self, subgraph: nx.DiGraph, analysis: QueryAnalysisResult) -> Dict:
-        return {(u,v): {"color":d.get("color","#888"), "width":d.get("width",1.0),
-                        "style":d.get("style","solid"), "arrows":"to"} for u,v,d in subgraph.edges(data=True)}
+    def undo_last_mutation(self) -> Optional[Dict]:
+        if not self.mutation_log:
+            return None
+        mutation = self.mutation_log.pop()
+        mut_type = mutation["type"]
+        if mut_type == "add_concept":
+            name = mutation["concept"]
+            if name in self.ontology.concepts:
+                del self.ontology.concepts[name]
+                self.session_concepts_added.discard(name)
+                self.ontology.relationships = [r for r in self.ontology.relationships if r.source != name and r.target != name]
+                self.session_relationships_added = [(s,t,rt,c) for s,t,rt,c in self.session_relationships_added if s != name and t != name]
+            self.ontology._build_synonym_index()
+        elif mut_type == "add_relationship":
+            source = mutation["source"]
+            target = mutation["target"]
+            rel_type = self.REL_STR_TO_ENUM.get(mutation["rel_type"], RelationshipType.INFLUENCES)
+            self.ontology.relationships = [r for r in self.ontology.relationships if not (r.source == source and r.target == target and r.rel_type == rel_type)]
+            self.session_relationships_added = [(s,t,rt,c) for s,t,rt,c in self.session_relationships_added if not (s == source and t == target and rt == rel_type)]
+        elif mut_type == "create_bridge":
+            bridge_name = mutation["bridge_name"]
+            if bridge_name in self.ontology.concepts:
+                del self.ontology.concepts[bridge_name]
+                self.session_concepts_added.discard(bridge_name)
+                self.query_bridge_concepts.pop(bridge_name, None)
+                self.ontology.relationships = [r for r in self.ontology.relationships if r.source != bridge_name and r.target != bridge_name]
+            self.ontology._build_synonym_index()
+        return mutation
 
-    def get_layout_params(self, analysis: QueryAnalysisResult) -> Dict:
-        lt = self.LAYOUT_HEURISTICS.get(analysis.query_type, "force")
-        return {"layout_type":lt, "gravity":0.1, "central_gravity":0.01, "velocity_decay":0.2, "node_distance":100}
+    def reset_to_base(self) -> Dict[str, int]:
+        removed_concepts = 0
+        removed_rels = 0
+        for name in list(self.session_concepts_added):
+            if name in self.ontology.concepts:
+                del self.ontology.concepts[name]
+                removed_concepts += 1
+        base_rels = self.ontology.relationships[:self._base_rel_count]
+        removed_rels = len(self.ontology.relationships) - len(base_rels)
+        self.ontology.relationships = base_rels
+        self.session_concepts_added.clear()
+        self.session_relationships_added.clear()
+        self.query_bridge_concepts.clear()
+        self.priority_overrides.clear()
+        self.mutation_log.clear()
+        self.ontology._build_synonym_index()
+        return {"concepts_removed": removed_concepts, "relationships_removed": removed_rels}
 
-    def generate_legend(self, analysis: QueryAnalysisResult) -> List[Dict]:
-        legend = []
-        for ctype, color in self.TYPE_COLORS.items():
-            if any(cp.concept_type.value == ctype for cp in analysis.concept_priorities.values() if cp.composite_score > 0.2):
-                legend.append({"label":ctype.replace("_"," ").title(), "color":color, "shape":"dot"})
-        legend.append({"label":"Focus Node", "color":"#FFD700", "shape":"dot", "border":3})
-        return legend
+    def export_mutations(self) -> Dict[str, Any]:
+        return {
+            "stats": self.stats,
+            "mutations": self.mutation_log,
+            "concepts_added": list(self.session_concepts_added),
+            "bridge_concepts": dict(self.query_bridge_concepts),
+            "priority_overrides": {k: round(v, 3) for k, v in self.priority_overrides.items()},
+        }
+
+    def import_mutations(self, data: Dict[str, Any]) -> int:
+        count = 0
+        for mutation in data.get("mutations", []):
+            if mutation["type"] == "add_concept":
+                result = self._add_concept_from_llm(
+                    {"name": mutation["concept"],
+                     "type": mutation.get("concept_type", "general"),
+                     "synonyms": mutation.get("synonyms", []),
+                     "definition": mutation.get("definition", "")},
+                    mutation.get("source_query", "restored")
+                )
+                if result:
+                    count += 1
+            elif mutation["type"] == "add_relationship":
+                result = self._add_relationship_from_llm(
+                    [mutation["source"], mutation["rel_type"],
+                     mutation["target"], mutation.get("confidence", 0.7)],
+                    mutation.get("source_query", "restored")
+                )
+                if result:
+                    count += 1
+        self.ontology._build_synonym_index()
+        return count
 
 # ============================================================================
-# QUERY PIPELINE (NEW)
+# PRIORITY-GUIDED SUBGRAPH EXTRACTOR
 # ============================================================================
-class QueryDrivenGraphPipeline:
-    def __init__(self, ontology: DomainOntology):
+class PriorityGuidedSubgraphExtractor:
+    def __init__(self, full_graph: nx.DiGraph,
+                 ontology: DomainOntology,
+                 expander: DynamicOntologyExpander) -> None:
+        self.full_graph = full_graph
         self.ontology = ontology
-        self.analyzer = None
-        self.scorer = OntologyPriorityScorer(ontology)
-        self.extractor = PrioritySubgraphExtractor(ontology)
-        self.visualizer = QueryVisualizationDriver(ontology)
+        self.expander = expander
 
-    def init_llm_analyzer(self, mode: str = "rule_based", **kwargs):
-        self.analyzer = LLMAnalyzerFactory.get_analyzer(mode, **kwargs)
+    def extract(self, analysis: QueryAnalysisResult) -> nx.DiGraph:
+        boosted = self.expander.get_priority_boosted_scores(analysis.concept_priorities)
+        concepts_above = analysis.get_concepts_above_threshold()
+        seed_nodes = set(analysis.focus_nodes + concepts_above)
+        visited = set(seed_nodes)
+        frontier = deque(seed_nodes)
+        depth_map = {n: 0 for n in seed_nodes}
+        max_depth = analysis.subgraph_depth
 
-    @timed
-    def process_query(self, query: str, max_nodes: int = 30, priority_threshold: float = 0.2,
-                      mode: str = "rule_based", **kwargs) -> Tuple[QueryAnalysisResult, nx.DiGraph, Dict, Dict, Dict]:
-        if not self.analyzer:
-            self.init_llm_analyzer(mode, **kwargs)
-        analysis = self.analyzer.analyze_query(query, self.ontology)
-        analysis.concept_priorities = self.scorer.score_all_concepts(analysis)
-        subgraph = self.extractor.extract(analysis, max_nodes=max_nodes, min_priority=priority_threshold)
-        node_params = self.visualizer.get_node_visual_params(subgraph, analysis)
-        edge_params = self.visualizer.get_edge_visual_params(subgraph, analysis)
-        layout_params = self.visualizer.get_layout_params(analysis)
-        return analysis, subgraph, node_params, edge_params, layout_params
+        while frontier:
+            current = frontier.popleft()
+            current_depth = depth_map[current]
+            if current_depth >= max_depth:
+                continue
+            for neighbor in list(self.full_graph.predecessors(current)) + list(self.full_graph.successors(current)):
+                if neighbor in visited:
+                    continue
+                include = False
+                if neighbor in boosted:
+                    if (boosted[neighbor].composite_score >= analysis.priority_threshold * 0.5
+                            or current_depth < max_depth - 1):
+                        include = True
+                elif neighbor in self.expander.session_concepts_added:
+                    include = True
+                elif neighbor in self.expander.query_bridge_concepts:
+                    include = True
+                else:
+                    if current_depth < max_depth - 1:
+                        include = True
+                if include:
+                    visited.add(neighbor)
+                    depth_map[neighbor] = current_depth + 1
+                    frontier.append(neighbor)
 
-    def render_pyvis(self, subgraph: nx.DiGraph, node_params: Dict, edge_params: Dict,
-                     layout_params: Dict, height: str = "600px") -> str:
-        net = Network(height=height, width="100%", directed=True, bgcolor="#1a1a2e", font_color="white")
-        if layout_params.get("layout_type") == "force":
-            net.force_atlas_2based(gravity=layout_params.get("gravity",0.1), central_gravity=0.01,
-                                   velocity_decay=0.2, node_distance=100)
-        for node, p in node_params.items():
-            net.add_node(node, label=p["label"], color=p["color"], size=p["size"],
-                         border_width=p["border_width"], border_color=p["border_color"],
-                         title=p["title"], opacity=p["opacity"])
-        for (u,v), p in edge_params.items():
-            net.add_edge(u, v, color=p["color"], width=p["width"],
-                         dashes=(p["style"]=="dashed"), arrows=p["arrows"], title=p.get("title",""))
-        return net.generate_html()
+        subgraph = nx.DiGraph()
+        for node in visited:
+            if node in self.full_graph.nodes:
+                subgraph.add_node(node, **self.full_graph.nodes[node])
+                if node in boosted:
+                    subgraph.nodes[node]["priority_score"] = boosted[node].composite_score
+                    subgraph.nodes[node]["is_explicit"] = boosted[node].is_explicitly_mentioned
+                    subgraph.nodes[node]["is_inferred"] = boosted[node].is_inferred
+                elif node in self.expander.session_concepts_added:
+                    subgraph.nodes[node]["priority_score"] = 0.5
+                    subgraph.nodes[node]["is_explicit"] = False
+                    subgraph.nodes[node]["is_inferred"] = True
+                    subgraph.nodes[node]["is_llm_added"] = True
+                else:
+                    subgraph.nodes[node]["priority_score"] = 0.2
+
+        for u, v, attrs in self.full_graph.edges(data=True):
+            if u in subgraph and v in subgraph:
+                edge_attrs = dict(attrs)
+                for path in analysis.highlight_paths:
+                    if len(path) >= 2:
+                        for i in range(len(path) - 1):
+                            if (path[i] == u and path[i+1] == v) or (path[i] == v and path[i+1] == u):
+                                edge_attrs["highlighted"] = True
+                                edge_attrs["width"] = max(edge_attrs.get("width", 1.0), 4.0)
+                subgraph.add_edge(u, v, **edge_attrs)
+
+        subgraph.graph["query_analysis"] = analysis
+        subgraph.graph["suggested_layout"] = analysis.suggested_layout
+        subgraph.graph["emphasis_direction"] = analysis.emphasis_direction
+        return subgraph
+
+# ============================================================================
+# QUERY-DRIVEN VISUALIZER (PyVis)
+# ============================================================================
+class QueryDrivenVisualizer:
+    def __init__(self, ontology: DomainOntology) -> None:
+        self.ontology = ontology
+        self.type_colors = {
+            ConceptType.MATERIAL.value: "#FF6B6B",
+            ConceptType.PROPERTY.value: "#4ECDC4",
+            ConceptType.PHENOMENON.value: "#FFE66D",
+            ConceptType.METHOD.value: "#95E1D3",
+            ConceptType.PARAMETER.value: "#F38181",
+            ConceptType.PROCESS.value: "#AA96DA",
+            ConceptType.MODEL.value: "#FCBAD3",
+            ConceptType.GENERAL.value: "#A8D8EA",
+        }
+
+    def render_pyvis(self, subgraph: nx.DiGraph, analysis: QueryAnalysisResult,
+                     height: str = "700px") -> str:
+        net = Network(height=height, width="100%", directed=True, notebook=False, cdn_resources="remote")
+        if analysis.suggested_layout == "bisected":
+            net.barnes_hut(gravity=80, central_gravity=0.3, spring_length=200, spring_strength=0.05, damping=0.95)
+        else:
+            net.barnes_hut(gravity=50, central_gravity=0.2, spring_length=150, spring_strength=0.04, damping=0.9)
+
+        for node, attrs in subgraph.nodes(data=True):
+            concept_type = attrs.get("concept_type", "general")
+            priority = attrs.get("priority_score", 0.2)
+            is_explicit = attrs.get("is_explicit", False)
+            is_llm_added = attrs.get("is_llm_added", False)
+            size = 15 + priority * 35
+            color = self.type_colors.get(concept_type, "#A8D8EA")
+            if is_explicit:
+                border_width, border_color, shape = 4, "#FF0000", "dot"
+            elif is_llm_added:
+                border_width, border_color, shape = 3, "#00FF00", "diamond"
+            else:
+                border_width, border_color, shape = 1, "#666666", "dot"
+            title = f"<b>{attrs.get('hierarchy_label', node)}</b><br>Type: {concept_type}<br>Priority: {priority:.2f}"
+            if is_llm_added:
+                title += "<br>⚠️ LLM-inferred concept"
+            defn = attrs.get("definition", "")
+            if defn:
+                title += f"<br><i>{defn[:150]}...</i>"
+            net.add_node(node, label=attrs.get("hierarchy_label", node).replace("_", " ").split(" › ")[-1],
+                         size=size, color=color, border_width=border_width, border_color=border_color,
+                         shape=shape, title=title, font={"size": 10 + priority * 6})
+
+        for u, v, attrs in subgraph.edges(data=True):
+            color = attrs.get("color", "#888888")
+            width = attrs.get("width", 1.0)
+            style = attrs.get("style", "solid")
+            highlighted = attrs.get("highlighted", False)
+            if highlighted:
+                color = "#FF0000"
+                width = max(width, 4.0)
+            dashes = style == "dashed" or attrs.get("source_type") == "cooccurrence"
+            net.add_edge(u, v, color=color, width=width, dashes=dashes,
+                         title=f"{u} → {v}<br>Type: {attrs.get('edge_type','unknown')}",
+                         arrows="to", arrowStrikethrough=False)
+
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.html', delete=False) as f:
+            net.save_graph(f.name)
+            html_content = Path(f.name).read_text(encoding='utf-8')
+        return html_content
+
+    def render_comparison_pyvis(self, subgraph: nx.DiGraph, analysis: QueryAnalysisResult,
+                                 height: str = "700px") -> str:
+        if not analysis.comparison_pairs:
+            return self.render_pyvis(subgraph, analysis, height)
+        net = Network(height=height, width="100%", directed=True, notebook=False)
+        left_nodes, right_nodes = set(), set()
+        if analysis.comparison_pairs:
+            pair = analysis.comparison_pairs[0]
+            left_term, right_term = pair[0].lower(), pair[1].lower()
+            for node in subgraph.nodes:
+                node_lower = node.lower()
+                if left_term in node_lower:
+                    left_nodes.add(node)
+                elif right_term in node_lower:
+                    right_nodes.add(node)
+        left_list, right_list = list(left_nodes), list(right_nodes)
+        other_nodes = [n for n in subgraph.nodes if n not in left_nodes and n not in right_nodes]
+        for i, node in enumerate(left_list):
+            subgraph.nodes[node]["x"] = -300
+            subgraph.nodes[node]["y"] = (i - len(left_list)/2) * 80
+            subgraph.nodes[node]["fixed"] = True
+        for i, node in enumerate(right_list):
+            subgraph.nodes[node]["x"] = 300
+            subgraph.nodes[node]["y"] = (i - len(right_list)/2) * 80
+            subgraph.nodes[node]["fixed"] = True
+        for i, node in enumerate(other_nodes):
+            subgraph.nodes[node]["x"] = 0
+            subgraph.nodes[node]["y"] = (i - len(other_nodes)/2) * 60
+            subgraph.nodes[node]["fixed"] = True
+        net.barnes_hut(enabled=False)
+        for node, attrs in subgraph.nodes(data=True):
+            color = "#4ECDC4" if node in left_nodes else "#FF6B6B" if node in right_nodes else "#AAAAAA"
+            priority = attrs.get("priority_score", 0.2)
+            size = 15 + priority * 30
+            net.add_node(node, label=attrs.get("hierarchy_label", node).split(" › ")[-1],
+                         size=size, color=color, x=attrs.get("x",0), y=attrs.get("y",0),
+                         fixed=attrs.get("fixed", False), title=f"<b>{node}</b><br>{attrs.get('definition','')[:100]}",
+                         font={"size":11})
+        for u, v, attrs in subgraph.edges(data=True):
+            net.add_edge(u, v, color=attrs.get("color","#888888"), width=attrs.get("width",1.0), arrows="to")
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.html', delete=False) as f:
+            net.save_graph(f.name)
+            html_content = Path(f.name).read_text(encoding='utf-8')
+        return html_content
+
+# ============================================================================
+# SESSION STATE MANAGER FOR LLM QUERY INTEGRATION
+# ============================================================================
+class QuerySessionManager:
+    SESSION_KEY = "sib_query_session"
+
+    @classmethod
+    def init_session(cls) -> Dict[str, Any]:
+        if cls.SESSION_KEY not in st.session_state:
+            st.session_state[cls.SESSION_KEY] = {
+                "query_history": [], "analysis_history": [], "mutation_history": [],
+                "analyzer_mode": "auto", "total_concepts_added": 0,
+                "total_relationships_added": 0,
+            }
+        return st.session_state[cls.SESSION_KEY]
+
+    @classmethod
+    def record_query(cls, query: str, analysis: QueryAnalysisResult,
+                     mutations: Dict[str, Any]) -> None:
+        session = cls.init_session()
+        session["query_history"].append(query)
+        session["analysis_history"].append({
+            "query": query, "primary_problem": analysis.primary_problem.value,
+            "query_type": analysis.query_type,
+            "concepts_found": len(analysis.all_relevant_concepts),
+            "explicit": len(analysis.explicitly_mentioned),
+            "inferred": len(analysis.inferred_concepts),
+            "confidence": analysis.confidence,
+            "timestamp": datetime.now().isoformat(),
+        })
+        session["mutation_history"].append({
+            "query": query,
+            "concepts_added": len(mutations.get("concepts_added", [])),
+            "relationships_added": len(mutations.get("relationships_added", [])),
+            "bridges_created": len(mutations.get("bridges_created", [])),
+            "timestamp": datetime.now().isoformat(),
+        })
+        session["total_concepts_added"] += len(mutations.get("concepts_added", []))
+        session["total_relationships_added"] += len(mutations.get("relationships_added", []))
+
+    @classmethod
+    def get_session(cls) -> Dict[str, Any]:
+        return cls.init_session()
+
+    @classmethod
+    def clear_session(cls) -> None:
+        if cls.SESSION_KEY in st.session_state:
+            del st.session_state[cls.SESSION_KEY]
 
 # ============================================================================
 # UTILITY FUNCTIONS (JSON loading, etc.)
@@ -1244,7 +1736,6 @@ def robust_load_file(filepath: Path):
     try:
         return json.loads(text)
     except:
-        # try JSONL
         records = []
         for line in text.splitlines():
             line=line.strip()
@@ -1274,7 +1765,6 @@ def build_master_dataframe(file_records: List[Tuple[str, List]]) -> pd.DataFrame
                 rows.append(rec)
     if not rows: return pd.DataFrame()
     df = pd.json_normalize(rows)
-    # try to parse year
     year_cols = [c for c in df.columns if 'year' in c.lower()]
     if year_cols:
         df["Year"] = pd.to_numeric(df[year_cols[0]], errors="coerce")
@@ -1288,20 +1778,19 @@ def load_embedding_model():
         return SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
 
 # ============================================================================
-# EXISTING VISUALIZATION FUNCTIONS (from v6.1) – full implementations
+# EXISTING VISUALIZATION FUNCTIONS (from v6.1) – included for completeness
 # ============================================================================
 def render_pyvis_graph(nx_graph, concept_abstract_map, physics_enabled=True,
                        cmap_name="viridis", top_n_nodes=0, theme=None,
                        physics_preset=None, show_edge_weights=False,
                        edge_label_mode="hover", **kwargs):
-    # This is the full function from the v6.1 code.
-    # We'll paste it here for completeness.
-    # (The user already has this in their codebase, but we include it.)
     if theme is None:
-        theme = THEME_PRESETS.get("Bright (Default)", {"bg":"#ffffff", "font":"#1e293b"})
+        theme = {"bg":"#ffffff","font":"#1e293b","node_border":"#f8fafc",
+                 "highlight_bg":"#ff6b6b","hover_bg":"#ffd93d","shadow_color":"rgba(0,0,0,0.15)",
+                 "tooltip_bg":"rgba(255,255,255,0.95)","tooltip_text":"#1e293b","tooltip_border":"#cbd5e1"}
     if physics_preset is None:
-        physics_preset = {"damping":0.55, "gravity":-2500, "spring_length":140,
-                          "spring_strength":0.05, "central_gravity":0.25, "stabilization":2500}
+        physics_preset = {"damping":0.55,"gravity":-2500,"spring_length":140,
+                          "spring_strength":0.05,"central_gravity":0.25,"stabilization":2500}
     if top_n_nodes > 0 and len(nx_graph.nodes()) > top_n_nodes:
         degrees = dict(nx_graph.degree(weight='weight'))
         top_nodes = sorted(degrees.keys(), key=lambda x: degrees[x], reverse=True)[:top_n_nodes]
@@ -1455,32 +1944,32 @@ def get_sib_category_color(concept: str, cmap_colors: Optional[List[str]] = None
                  'parameter':'#e377c2', 'processing':'#7f7f7f', 'general':'#bcbd22'}
     return color_map.get(category, '#bcbd22')
 
-# ============================================================================
-# SIDEBAR & THEME PRESETS
-# ============================================================================
-THEME_PRESETS = {
-    "Bright (Default)": {"bg":"#ffffff", "font":"#1e293b", "tooltip_bg":"rgba(255,255,255,0.95)",
-                         "tooltip_border":"#cbd5e1", "tooltip_text":"#1e293b",
-                         "edge_unknown":"rgba(148,163,184,0.3)", "node_border":"#f8fafc",
-                         "highlight_bg":"#ff6b6b", "hover_bg":"#ffd93d", "shadow_color":"rgba(0,0,0,0.15)",
-                         "plotly_bg":"#ffffff", "plotly_paper":"#ffffff", "grid_color":"#e2e8f0", "axis_color":"#64748b"},
-    "Dark": {"bg":"#0f172a", "font":"#e2e8f0", "tooltip_bg":"rgba(15,23,42,0.95)",
-             "tooltip_border":"#334155", "tooltip_text":"#e2e8f0",
-             "edge_unknown":"rgba(148,163,184,0.4)", "node_border":"#f8fafc",
-             "highlight_bg":"#ff6b6b", "hover_bg":"#ffd93d", "shadow_color":"rgba(0,0,0,0.6)",
-             "plotly_bg":"#0f172a", "plotly_paper":"#0f172a", "grid_color":"#1e293b", "axis_color":"#94a3b8"},
-}
-SUPPORTED_COLORMAPS = {"viridis":"Viridis", "plasma":"Plasma", "inferno":"Inferno", "magma":"Magma",
-                       "cividis":"Cividis", "turbo":"Turbo", "jet":"Jet", "rainbow":"Rainbow",
-                       "coolwarm":"Coolwarm", "RdBu":"RdBu", "Spectral":"Spectral",
-                       "tab10":"Set1", "tab20":"Set2"}
-
 def get_colormap_colors(cmap_name: str, n: int) -> List[str]:
     try:
         cmap = matplotlib.colormaps.get_cmap(cmap_name).resampled(n)
         return [matplotlib.colors.to_hex(cmap(i)) for i in range(n)]
     except:
         return ["#ff6b6b"]*n
+
+# ============================================================================
+# THEME PRESETS & SIDEBAR
+# ============================================================================
+THEME_PRESETS = {
+    "Bright (Default)": {"bg":"#ffffff","font":"#1e293b","tooltip_bg":"rgba(255,255,255,0.95)",
+                         "tooltip_border":"#cbd5e1","tooltip_text":"#1e293b",
+                         "edge_unknown":"rgba(148,163,184,0.3)","node_border":"#f8fafc",
+                         "highlight_bg":"#ff6b6b","hover_bg":"#ffd93d","shadow_color":"rgba(0,0,0,0.15)",
+                         "plotly_bg":"#ffffff","plotly_paper":"#ffffff","grid_color":"#e2e8f0","axis_color":"#64748b"},
+    "Dark": {"bg":"#0f172a","font":"#e2e8f0","tooltip_bg":"rgba(15,23,42,0.95)",
+             "tooltip_border":"#334155","tooltip_text":"#e2e8f0",
+             "edge_unknown":"rgba(148,163,184,0.4)","node_border":"#f8fafc",
+             "highlight_bg":"#ff6b6b","hover_bg":"#ffd93d","shadow_color":"rgba(0,0,0,0.6)",
+             "plotly_bg":"#0f172a","plotly_paper":"#0f172a","grid_color":"#1e293b","axis_color":"#94a3b8"},
+}
+SUPPORTED_COLORMAPS = {"viridis":"Viridis","plasma":"Plasma","inferno":"Inferno","magma":"Magma",
+                       "cividis":"Cividis","turbo":"Turbo","jet":"Jet","rainbow":"Rainbow",
+                       "coolwarm":"Coolwarm","RdBu":"RdBu","Spectral":"Spectral",
+                       "tab10":"Set1","tab20":"Set2"}
 
 def render_sidebar():
     with st.sidebar:
@@ -1506,53 +1995,187 @@ def render_sidebar():
         st.slider("Inference weight", 0.0, 0.3, 0.1, key="inf_weight")
 
 # ============================================================================
+# UI FUNCTIONS FOR LLM QUERY PANEL
+# ============================================================================
+def render_llm_query_panel(ontology: DomainOntology,
+                           expander: DynamicOntologyExpander,
+                           full_graph: nx.DiGraph) -> Optional[QueryAnalysisResult]:
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 🔍 LLM-Guided Query")
+    st.sidebar.caption("Ask a question to dynamically expand the ontology and focus the graph")
+
+    session = QuerySessionManager.get_session()
+    mode = st.sidebar.selectbox(
+        "Analysis Engine",
+        ["auto", "fallback", "openai", "local"],
+        index=["auto", "fallback", "openai", "local"].index(session.get("analyzer_mode", "auto")),
+        key="llm_mode_select"
+    )
+    session["analyzer_mode"] = mode
+
+    api_key = None
+    if mode in ("auto", "openai"):
+        api_key = st.sidebar.text_input("OpenAI API Key (optional)", type="password",
+                                        value=os.environ.get("OPENAI_API_KEY", ""),
+                                        key="openai_key_input")
+    local_model = None
+    if mode in ("auto", "local"):
+        local_model = st.sidebar.text_input("Local Model (optional)",
+                                            value="mistralai/Mistral-7B-Instruct-v0.2",
+                                            key="local_model_input")
+
+    st.sidebar.markdown("**Example queries:**")
+    example_queries = []
+    for problem, pdef in SIB_PROBLEM_DEFINITIONS.items():
+        if pdef.example_queries:
+            example_queries.extend(pdef.example_queries[:1])
+    selected_example = st.sidebar.selectbox("Or select an example:", [""] + example_queries,
+                                            key="example_query_select")
+    query = st.sidebar.text_area("Your SIB question:", value=selected_example, height=100,
+                                 key="llm_query_input",
+                                 placeholder="e.g., Why can't sodium intercalate into graphite like lithium does?")
+    submitted = st.sidebar.button("🚀 Analyze & Expand Ontology", type="primary", key="llm_submit")
+    if not submitted or not query.strip():
+        return None
+
+    factory = LLMQueryAnalyzerFactory()
+    analyzer = factory.get_analyzer(mode=mode, api_key=api_key, local_model=local_model)
+
+    if isinstance(analyzer, OpenAIQueryAnalyzer):
+        st.sidebar.info("🤖 Using **OpenAI GPT-4o-mini**")
+    elif isinstance(analyzer, LocalLLMQueryAnalyzer):
+        st.sidebar.info("🖥️ Using **Local LLM**")
+    else:
+        st.sidebar.info("📋 Using **Rule-based fallback**")
+
+    with st.sidebar.spinner("Analyzing query..."):
+        analysis = analyzer.analyze_query(query, ontology)
+    with st.sidebar.spinner("Expanding ontology..."):
+        mutations = expander.apply_query_analysis(analysis, analyzer)
+
+    QuerySessionManager.record_query(query, analysis, mutations)
+
+    st.sidebar.success(f"✅ Analysis complete (confidence: {analysis.confidence:.0%})")
+    st.sidebar.caption(f"Primary problem: **{analysis.primary_problem.value}**")
+    st.sidebar.caption(f"Explicit concepts: {len(analysis.explicitly_mentioned)} | "
+                       f"Inferred: {len(analysis.inferred_concepts)}")
+    if mutations["concepts_added"]:
+        st.sidebar.warning(f"🆕 {len(mutations['concepts_added'])} new concept(s) added to ontology")
+        for c in mutations["concepts_added"]:
+            st.sidebar.markdown(f"  - `{c['name']}` ({c['type']})")
+    if mutations["bridges_created"]:
+        st.sidebar.info(f"🌉 {len(mutations['bridges_created'])} bridge concept(s) created")
+        for b in mutations["bridges_created"]:
+            st.sidebar.markdown(f"  - `{b['bridge']}` ← `{b['for']}`")
+    return analysis
+
+def render_mutation_controls(expander: DynamicOntologyExpander) -> None:
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 🧬 Ontology Mutations")
+    stats = expander.stats
+    col1, col2 = st.sidebar.columns(2)
+    col1.metric("Concepts +", stats["concepts_added"])
+    col2.metric("Relations +", stats["relationships_added"])
+    if stats["total_mutations"] > 0:
+        with st.sidebar.expander("📋 Mutation Log", expanded=False):
+            for i, mut in enumerate(expander.mutation_log[-10:], 1):
+                if mut["type"] == "add_concept":
+                    st.markdown(f"{i}. ➕ `{mut['concept']}`")
+                elif mut["type"] == "add_relationship":
+                    st.markdown(f"{i}. 🔗 `{mut['source']}` → `{mut['target']}`")
+                elif mut["type"] == "create_bridge":
+                    st.markdown(f"{i}. 🌉 `{mut['bridge_name']}`")
+        col_undo, col_reset = st.sidebar.columns(2)
+        if col_undo.button("↩️ Undo Last", key="undo_mutation"):
+            undone = expander.undo_last_mutation()
+            if undone:
+                st.sidebar.toast(f"Undone: {undone['type']}")
+                st.rerun()
+        if col_reset.button("🔄 Reset All", key="reset_mutations"):
+            result = expander.reset_to_base()
+            st.sidebar.toast(f"Reset: {result['concepts_removed']} concepts, "
+                             f"{result['relationships_removed']} relations removed")
+            st.rerun()
+        if st.sidebar.button("📦 Export Mutations", key="export_mutations"):
+            exported = expander.export_mutations()
+            st.sidebar.download_button(
+                "Download JSON",
+                data=json.dumps(exported, indent=2),
+                file_name=f"sib_ontology_mutations_{datetime.now():%Y%m%d_%H%M%S}.json",
+                mime="application/json",
+                key="download_mutations"
+            )
+
+def render_query_history() -> None:
+    session = QuerySessionManager.get_session()
+    if not session["query_history"]:
+        return
+    st.sidebar.markdown("---")
+    with st.sidebar.expander("📜 Query History", expanded=False):
+        for i, entry in enumerate(reversed(session["analysis_history"][-10:]), 1):
+            st.markdown(f"**{i}.** {entry['query'][:60]}...")
+            st.caption(f"  Problem: {entry['primary_problem']} | "
+                       f"Type: {entry['query_type']} | "
+                       f"Concepts: {entry['concepts_found']}")
+            st.caption(f"  Added: +{session['mutation_history'][-i].get('concepts_added', 0)} concepts, "
+                       f"+{session['mutation_history'][-i].get('relationships_added', 0)} rels")
+
+def render_analysis_details(analysis: QueryAnalysisResult) -> None:
+    st.markdown("## 📊 Query Analysis Results")
+    with st.expander("🧠 Reasoning Chain", expanded=True):
+        for step in analysis.reasoning_chain:
+            st.markdown(f"→ {step}")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Primary Problem", analysis.primary_problem.value.replace("_", " "))
+    col2.metric("Query Type", analysis.query_type)
+    col3.metric("Confidence", f"{analysis.confidence:.0%}")
+    if analysis.problem_confidences:
+        st.markdown("### Problem Affinity Scores")
+        probs_df = pd.DataFrame([
+            {"Problem": k.replace("_", " ").title(), "Score": v}
+            for k, v in sorted(analysis.problem_confidences.items(),
+                               key=lambda x: -x[1]) if v > 0
+        ])
+        if not probs_df.empty:
+            fig, ax = plt.subplots(figsize=(8, 2))
+            ax.barh(probs_df["Problem"], probs_df["Score"], color="#4ECDC4")
+            ax.set_xlim(0, 1)
+            ax.set_xlabel("Affinity Score")
+            st.pyplot(fig)
+            plt.close(fig)
+    st.markdown("### Concept Priority Rankings")
+    top = analysis.get_top_concepts(15)
+    if top:
+        priority_data = [cp.to_dict() for cp in top]
+        df = pd.DataFrame(priority_data)
+        def highlight_row(row):
+            if row.get("explicit", False):
+                return ["background-color: #d4edda"] * len(row)
+            elif row.get("inferred", False):
+                return ["background-color: #fff3cd"] * len(row)
+            return [""] * len(row)
+        st.dataframe(df.style.apply(highlight_row, axis=1), use_container_width=True)
+    if analysis.highlight_paths:
+        st.markdown("### 🔴 Highlighted Causal Paths")
+        for path in analysis.highlight_paths[:5]:
+            path_str = " → ".join(f"**{n.replace('_', ' ')}**" for n in path)
+            st.markdown(path_str)
+
+# ============================================================================
 # MAIN APPLICATION
 # ============================================================================
-def render_query_interface(ontology: DomainOntology, pipeline: QueryDrivenGraphPipeline):
-    st.subheader("🔎 LLM‑Directed Query Interface")
-    query = st.text_area("Enter your SIB research question:", height=100,
-                         placeholder="e.g., Why can't sodium intercalate into graphite like lithium does?")
-    col1, col2, col3 = st.columns([2,1,1])
-    with col1:
-        mode = st.selectbox("LLM Mode", ["rule_based", "local", "openai"], index=0)
-    with col2:
-        if mode == "openai":
-            api_key = st.text_input("OpenAI API Key", type="password")
-            api_model = st.text_input("Model", "gpt-3.5-turbo")
-        else:
-            api_key = api_model = None
-    with col3:
-        if mode == "local":
-            model_name = st.text_input("Model name", "gpt2")
-        else:
-            model_name = None
-    if st.button("Analyze & Visualize", type="primary") and query:
-        with st.spinner("Processing query..."):
-            analysis, subgraph, node_params, edge_params, layout_params = pipeline.process_query(
-                query, max_nodes=30, priority_threshold=0.2,
-                mode=mode, api_key=api_key, api_model=api_model, model_name=model_name
-            )
-        st.success("Analysis complete")
-        col_a, col_b, col_c = st.columns(3)
-        col_a.metric("Primary Problem", analysis.primary_problem.value.replace("_"," ").title())
-        col_b.metric("Query Type", analysis.query_type.title())
-        col_c.metric("Concepts Found", len(analysis.all_relevant_concepts))
-        with st.expander("📋 Priority Rankings"):
-            top = analysis.get_top_concepts(10)
-            df = pd.DataFrame([cp.to_dict() for cp in top])
-            st.dataframe(df)
-        st.subheader("🌐 Extracted Subgraph")
-        html = pipeline.render_pyvis(subgraph, node_params, edge_params, layout_params, height="500px")
-        st.components.v1.html(html, height=550)
-        st.caption("Nodes colored by concept type; focus nodes in gold border.")
-
 def main():
     st.title("🔋 SIB Quantitative Descriptor Graph v6.2 – LLM Query")
-    st.caption("Integrated ontology, batch processing, GNN, and LLM-directed query interface.")
+    st.caption("Integrated ontology, batch processing, GNN, and LLM-directed dynamic expansion.")
 
     if 'ontology' not in st.session_state:
         st.session_state.ontology = DomainOntology()
     ontology = st.session_state.ontology
+
+    # Initialize expander if not present
+    if 'expander' not in st.session_state:
+        st.session_state.expander = DynamicOntologyExpander(ontology)
+    expander = st.session_state.expander
 
     render_sidebar()
 
@@ -1572,16 +2195,17 @@ def main():
         st.error("Select at least one text column.")
         return
 
-    # Build graph (full or batch) – simplified demo
-    if st.button("🚀 Build Concept Graph", type="primary") or st.session_state.get("batch_trigger"):
-        # For demo, we create a dummy graph.
-        # In the real v6.1 code, the full analysis pipeline would run.
-        # We'll just place a placeholder that creates a simple graph from the ontology.
-        G = nx.Graph()
+    # Build graph (simplified demo; replace with full v6.1 pipeline for real data)
+    if st.button("🚀 Build Concept Graph (Demo)", type="primary") or st.session_state.get("batch_trigger"):
+        # Create a graph from the ontology
+        G = nx.DiGraph()
         for name in ontology.concepts.keys():
-            G.add_node(name)
+            G.add_node(name, concept_type=ontology.get_concept_type(name).value,
+                       definition=ontology.get_definition(name))
         for rel in ontology.relationships:
-            G.add_edge(rel.source, rel.target, weight=rel.confidence, edge_type=rel.rel_type.value)
+            G.add_edge(rel.source, rel.target, weight=rel.confidence,
+                       edge_type=rel.rel_type.value, color=get_edge_color(rel.rel_type),
+                       width=get_edge_width(rel.rel_type), style=get_edge_style(rel.rel_type))
         st.session_state.analysis_data = {
             "nx_graph": G,
             "valid_concepts": list(G.nodes()),
@@ -1592,32 +2216,46 @@ def main():
         }
         st.success("Graph built (demo). Replace with full v6.1 pipeline for real data.")
 
-    # Display results
+    # Render LLM query panel in sidebar
+    full_graph = st.session_state.analysis_data.get("nx_graph", nx.DiGraph()) if st.session_state.get("analysis_data") else nx.DiGraph()
+    analysis = render_llm_query_panel(ontology, expander, full_graph)
+    render_mutation_controls(expander)
+    render_query_history()
+
+    # Main display
     if st.session_state.get("analysis_data"):
         data = st.session_state.analysis_data
         G = data["nx_graph"]
         theme = THEME_PRESETS.get(st.session_state.get("theme", "Bright (Default)"), THEME_PRESETS["Bright (Default)"])
-        tabs = st.tabs(["📊 Graph", "🧪 Analytics", "🔎 LLM Query", "📥 Export"])
-        with tabs[0]:
-            st.subheader("Interactive Graph")
-            # Use the full render_pyvis_graph from above
-            render_pyvis_graph(G, data["concept_abstract_map"], cmap_name=st.session_state.get("cmap_name","viridis"), theme=theme)
-        with tabs[1]:
-            st.subheader("Distillation & Analytics")
-            if "distill_df" in data:
-                st.dataframe(data["distill_df"])
-            if "top_scores" in data and not data["top_scores"].empty:
-                st.dataframe(data["top_scores"])
-        with tabs[2]:
-            pipeline = QueryDrivenGraphPipeline(ontology)
-            render_query_interface(ontology, pipeline)
-        with tabs[3]:
-            st.subheader("Export")
-            st.info("Export functionality available in full v6.1.")
+
+        # If we have a query analysis, show the focused subgraph
+        if analysis:
+            render_analysis_details(analysis)
+            extractor = PriorityGuidedSubgraphExtractor(G, ontology, expander)
+            subgraph = extractor.extract(analysis)
+            visualizer = QueryDrivenVisualizer(ontology)
+            if analysis.query_type == "comparison" and analysis.comparison_pairs:
+                html = visualizer.render_comparison_pyvis(subgraph, analysis)
+            else:
+                html = visualizer.render_pyvis(subgraph, analysis)
+            st.components.v1.html(html, height=700, scrolling=True)
+        else:
+            # Show full graph
+            tabs = st.tabs(["📊 Graph", "🧪 Analytics", "📥 Export"])
+            with tabs[0]:
+                st.subheader("Interactive Graph")
+                render_pyvis_graph(G, data["concept_abstract_map"], cmap_name=st.session_state.get("cmap_name","viridis"), theme=theme)
+            with tabs[1]:
+                st.subheader("Distillation & Analytics")
+                if "distill_df" in data:
+                    st.dataframe(data["distill_df"])
+                if "top_scores" in data and not data["top_scores"].empty:
+                    st.dataframe(data["top_scores"])
+            with tabs[2]:
+                st.subheader("Export")
+                st.info("Export functionality available in full v6.1.")
     else:
-        st.info("Build the concept graph first, or use the LLM Query tab below.")
-        pipeline = QueryDrivenGraphPipeline(ontology)
-        render_query_interface(ontology, pipeline)
+        st.info("Build the concept graph first (click the button above), then use the LLM query panel in the sidebar.")
 
 if __name__ == "__main__":
     main()
