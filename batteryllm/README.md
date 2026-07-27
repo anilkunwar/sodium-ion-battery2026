@@ -21,4 +21,4 @@ R6-R7
 
 [![meaningtowords](https://img.shields.io/badge/naionbatteryllmcg-v6.0-red)](https://llm-guided-na-ion-battery-concept-graph6.streamlit.app/) (Basic Version, The LLM learns from Concept Graph to Respond to the User's Query, The  subgraph is a pre-computed visualization tied to the problem category (e.g. anode_bottleneck), not dynamically constructed from the query content. This is why it appears generic and not distinct to the specific question about sodium vs lithium intercalation in graphite.)
 
-[![meaningtowords](https://img.shields.io/badge/naionbatteryllmcg-v7.0-red)](https://llm-guided-na-ion-battery-concept-graph7.streamlit.app/) (Advanced Version, The LLM learns from Concept Graph to Respond to the User's Query)
+[![meaningtowords](https://img.shields.io/badge/naionbatteryllmcg-v7.0-red)](https://llm-guided-na-ion-battery-concept-graph7.streamlit.app/) (Advanced Version, The LLM learns from Concept Graph to Respond to the User's Query, OOM for LLM-Guided Q&A)
