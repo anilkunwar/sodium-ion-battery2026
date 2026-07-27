@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Sodium-Ion Battery Quantitative Descriptor Graph v6.1 (SIB Edition)
+Sodium-Ion Battery Quantitative Descriptor Graph v6.2 (SIB Edition)
 ====================================================================
 Multi-level reasoning concept graph for numerical/quantitative description
 of Sodium-Ion Batteries (SIBs).
@@ -60,7 +60,7 @@ pip install streamlit torch transformers sentence-transformers networkx scikit-l
 pip install pyvis plotly pandas numpy kaleido matplotlib scipy seaborn bibtexparser
 
 Run:
-    streamlit run sib_concept_graph.py
+    streamlit run sib_concept_graph_v6.2_llm.py
 
 Place JSON/BibTeX/CSV files in ./json_metadatabase/ folder next to this script.
 """
@@ -6519,6 +6519,20 @@ import numpy as np
 import streamlit as st
 
 # ============================================================================
+# 0. LOCAL LLM MODEL REGISTRY (< 1B parameters for Streamlit Cloud)
+# ============================================================================
+LOCAL_LLM_REGISTRY: Dict[str, Optional[str]] = {
+    "Fallback (Rule-based, no LLM)": None,
+    "DistilGPT-2 (82M, fastest)": "distilgpt2",
+    "GPT-Neo-125M (125M)": "EleutherAI/gpt-neo-125M",
+    "Pythia-410M (410M, balanced)": "EleutherAI/pythia-410m",
+    "BLOOM-560M (560M, multilingual)": "bigscience/bloom-560m",
+    "Qwen2-0.5B-Instruct (500M, best JSON)": "Qwen/Qwen2-0.5B-Instruct",
+    "Qwen2.5-0.5B-Instruct (500M, newest)": "Qwen/Qwen2.5-0.5B-Instruct",
+    "TinyLlama-1.1B-Chat (1.1B, chat-optimized)": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+}
+
+# ============================================================================
 # 1. QUERY ANALYSIS DATA STRUCTURES
 # ============================================================================
 class SIBCoreProblem(Enum):
@@ -6830,7 +6844,7 @@ class OpenAIQueryAnalyzer(LLMQueryAnalyzer):
             return FallbackAnalyzer().analyze_query(query, ontology)
 
 class LocalLLMQueryAnalyzer(LLMQueryAnalyzer):
-    def __init__(self, model_name: str = "mistralai/Mistral-7B-Instruct-v0.2"):
+    def __init__(self, model_name: str = "distilgpt2"):
         self.model_name = model_name
         self._pipeline = None
         self._loaded = False
@@ -6838,24 +6852,63 @@ class LocalLLMQueryAnalyzer(LLMQueryAnalyzer):
         self._pending_new_relationships = []
 
     def _load_model(self):
-        if self._loaded: return
+        if self._loaded:
+            return
         try:
             from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
             import torch
+
+            st.info(f"⏳ Loading local model: `{self.model_name}`… (first run may take 1–2 min)")
+
             tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-            model = AutoModelForCausalLM.from_pretrained(self.model_name, torch_dtype=torch.float16, device_map="auto", load_in_8bit=True)
-            self._pipeline = pipeline("text-generation", model=model, tokenizer=tokenizer, max_new_tokens=1500, temperature=0.1)
+
+            # Memory-efficient loading for Streamlit Cloud (≤1 GB RAM)
+            load_kwargs: Dict[str, Any] = {}
+            if torch.cuda.is_available():
+                load_kwargs["torch_dtype"] = torch.float16
+                load_kwargs["device_map"] = "auto"
+                try:
+                    load_kwargs["load_in_8bit"] = True
+                except Exception:
+                    pass
+            else:
+                load_kwargs["torch_dtype"] = torch.float32
+                load_kwargs["device_map"] = None
+
+            model = AutoModelForCausalLM.from_pretrained(self.model_name, **load_kwargs)
+
+            self._pipeline = pipeline(
+                "text-generation",
+                model=model,
+                tokenizer=tokenizer,
+                max_new_tokens=512,  # Reduced from 1500 to save memory & time
+                temperature=0.1,
+                do_sample=True,
+                pad_token_id=tokenizer.eos_token_id,
+            )
             self._loaded = True
+            st.success(f"✅ Model `{self.model_name}` loaded!")
         except Exception as e:
-            st.warning(f"Failed to load local model: {e}")
+            st.warning(f"⚠️ Failed to load local model `{self.model_name}`: {e}")
+            self._loaded = False
+        finally:
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     def is_available(self) -> bool:
         self._load_model()
         return self._loaded
 
     def analyze_query(self, query: str, ontology: Any) -> QueryAnalysisResult:
-        if not self.is_available(): return FallbackAnalyzer().analyze_query(query, ontology)
-        prompt = f"[INST] You are an SIB expert. Analyze: '{query}'. Return ONLY valid JSON with: primary_problem, explicitly_mentioned (snake_case list), inferred_concepts (list), query_type, highlight_paths (list of [src, tgt]), reasoning_chain (list). [/INST]"
+        if not self.is_available():
+            return FallbackAnalyzer().analyze_query(query, ontology)
+        prompt = (
+            f"[INST] You are an SIB expert. Analyze: '{query}'. "
+            "Return ONLY valid JSON with: primary_problem, explicitly_mentioned "
+            "(snake_case list), inferred_concepts (list), query_type, highlight_paths "
+            "(list of [src, tgt]), reasoning_chain (list). [/INST]"
+        )
         try:
             result = self._pipeline(prompt)[0]["generated_text"]
             json_match = re.search(r'\{.*\}', result, re.DOTALL)
@@ -6865,31 +6918,47 @@ class LocalLLMQueryAnalyzer(LLMQueryAnalyzer):
                 fake_openai = OpenAIQueryAnalyzer()
                 fake_openai._pending_new_concepts = parsed.get("new_concepts", [])
                 fake_openai._pending_new_relationships = parsed.get("new_relationships", [])
-                return fake_openai.analyze_query(query, ontology) # Delegate parsing
+                return fake_openai.analyze_query(query, ontology)  # Delegate parsing
         except Exception as e:
             st.warning(f"Local LLM parsing failed: {e}")
+        finally:
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
         return FallbackAnalyzer().analyze_query(query, ontology)
 
 class LLMQueryAnalyzerFactory:
     def __init__(self):
         self._openai_cache: Optional[OpenAIQueryAnalyzer] = None
-        self._local_cache: Optional[LocalLLMQueryAnalyzer] = None
+        self._local_cache: Dict[str, LocalLLMQueryAnalyzer] = {}
         self._fallback = FallbackAnalyzer()
 
     def get_analyzer(self, mode: str = "auto", api_key: str = None, local_model: str = None) -> LLMQueryAnalyzer:
         if mode == "openai":
-            if self._openai_cache is None: self._openai_cache = OpenAIQueryAnalyzer(api_key=api_key)
+            if self._openai_cache is None:
+                self._openai_cache = OpenAIQueryAnalyzer(api_key=api_key)
             return self._openai_cache
         elif mode == "local":
-            if self._local_cache is None: self._local_cache = LocalLLMQueryAnalyzer(local_model or "mistralai/Mistral-7B-Instruct-v0.2")
-            return self._local_cache
+            model = local_model
+            if model is None:
+                return self._fallback
+            if model not in self._local_cache:
+                self._local_cache[model] = LocalLLMQueryAnalyzer(model)
+            return self._local_cache[model]
         elif mode == "fallback":
             return self._fallback
-        else: # auto
-            if self._openai_cache is None: self._openai_cache = OpenAIQueryAnalyzer(api_key=api_key)
-            if self._openai_cache.is_available(): return self._openai_cache
-            if self._local_cache is None: self._local_cache = LocalLLMQueryAnalyzer(local_model or "mistralai/Mistral-7B-Instruct-v0.2")
-            if self._local_cache.is_available(): return self._local_cache
+        else:  # auto
+            if self._openai_cache is None:
+                self._openai_cache = OpenAIQueryAnalyzer(api_key=api_key)
+            if self._openai_cache.is_available():
+                return self._openai_cache
+            model = local_model
+            if model is None:
+                return self._fallback
+            if model not in self._local_cache:
+                self._local_cache[model] = LocalLLMQueryAnalyzer(model)
+            if self._local_cache[model].is_available():
+                return self._local_cache[model]
             return self._fallback
 
 # ============================================================================
@@ -7230,9 +7299,27 @@ def render_llm_query_panel(ontology: Any, expander: DynamicOntologyExpander, ful
     api_key = None
     if mode in ("auto", "openai"):
         api_key = st.sidebar.text_input("OpenAI API Key (optional)", type="password", value=os.environ.get("OPENAI_API_KEY", ""), key="openai_key_input")
+
+    # Local model dropdown (memory-safe options for Streamlit Cloud)
     local_model = None
     if mode in ("auto", "local"):
-        local_model = st.sidebar.text_input("Local Model (optional)", value="mistralai/Mistral-7B-Instruct-v0.2", key="local_model_input")
+        st.sidebar.markdown("#### 🖥️ Local LLM Model")
+        st.sidebar.caption("⚠️ Streamlit Cloud ≈1 GB RAM. Pick a small model or use Fallback.")
+
+        model_display_names = list(LOCAL_LLM_REGISTRY.keys())
+        selected_display = st.sidebar.selectbox(
+            "Select model:",
+            options=model_display_names,
+            index=0,  # Default: Fallback
+            key="local_model_select",
+        )
+        local_model = LOCAL_LLM_REGISTRY[selected_display]
+        st.session_state['selected_local_model'] = local_model
+
+        if local_model and "TinyLlama" in local_model:
+            st.sidebar.warning("⚠️ TinyLlama (1.1B) may OOM on free tier. Use DistilGPT-2 or GPT-Neo-125M for safety.")
+        elif local_model and ("0.5B" in selected_display or "560M" in selected_display or "410M" in selected_display):
+            st.sidebar.info("ℹ️ 400–500M models work on free tier but load slowly. DistilGPT-2 (82M) is fastest.")
 
     example_queries = [q for pdef in SIB_PROBLEM_DEFINITIONS.values() for q in pdef.example_queries[:1]]
     selected_example = st.sidebar.selectbox("Or select an example:", [""] + example_queries, key="example_query_select")
@@ -7335,7 +7422,8 @@ def render_llm_qa_tab(analysis_data: Dict, ontology: Any):
     if st.button("🔍 Analyze & Answer", type="primary"):
         if not query.strip(): st.warning("Please enter a query."); return
             
-        analyzer = factory.get_analyzer(mode=mode)
+        local_model = st.session_state.get('selected_local_model')
+        analyzer = factory.get_analyzer(mode=mode, local_model=local_model)
         generator.analyzer = analyzer
         
         with st.spinner("🧠 Analyzing query and expanding ontology..."):
@@ -7373,13 +7461,13 @@ def render_llm_qa_tab(analysis_data: Dict, ontology: Any):
 
 def main() -> None:
     st.title(
-        "🔋 Sodium-Ion Battery Quantitative Descriptor Graph v6.1"
+        "🔋 Sodium-Ion Battery Quantitative Descriptor Graph v6.2"
     )
     st.caption(
         "Multi-level reasoning concept graph for numerical/quantitative description of Sodium-Ion Batteries | "
         "Focus: Electrochemical, Compositional, and Performance Descriptors | "
         "Memory-Safe | Batch Processing (≤1 GB) | Interactive Visualization | "
-        "Ontology-aware resolution"
+        "Ontology-aware resolution | LLM-Guided Q&A"
     )
 
     if 'ontology' not in st.session_state:
