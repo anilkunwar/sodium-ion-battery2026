@@ -7121,7 +7121,12 @@ class PriorityGuidedSubgraphExtractor:
     def extract(self, analysis: QueryAnalysisResult) -> nx.Graph:
         boosted = self.expander.get_priority_boosted_scores(analysis.concept_priorities)
         concepts_above = analysis.get_concepts_above_threshold()
-        seed_nodes = set(analysis.focus_nodes + concepts_above)
+
+        # FIX: Filter seed nodes to only include those actually present in the full graph
+        # (LLM/Fallback might suggest concepts that were filtered out by MIN_CONCEPT_FREQ)
+        raw_seed_nodes = set(analysis.focus_nodes + concepts_above)
+        seed_nodes = set(n for n in raw_seed_nodes if n in self.full_graph)
+
         visited = set(seed_nodes)
         frontier = deque(seed_nodes)
         depth_map = {n: 0 for n in seed_nodes}
