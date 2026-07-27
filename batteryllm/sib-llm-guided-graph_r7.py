@@ -4193,7 +4193,7 @@ def render_graph_fallback(
             pd.DataFrame(
                 freq_data[:15], columns=["Concept", "Abstract Count"]
             ),
-            use_container_width=True,
+            width="stretch",
         )
 
 
@@ -4667,7 +4667,7 @@ def render_community_detection(
                     )[:5]
                 ),
             })
-        st.dataframe(pd.DataFrame(comm_data), use_container_width=True)
+        st.dataframe(pd.DataFrame(comm_data), width="stretch")
     except Exception as e:
         st.warning(f"Community detection failed: {e}")
 
@@ -4747,7 +4747,7 @@ def render_concept_growth(
         xaxis_tickangle=-45,
     )
     st.plotly_chart(fig, use_container_width=True)
-    st.dataframe(growth_df, use_container_width=True)
+    st.dataframe(growth_df, width="stretch")
 
 
 def render_bubble_chart(
@@ -4950,7 +4950,7 @@ def display_metric_dashboard(metrics: Dict, theme=None) -> None:
         bridge_df = pd.DataFrame(
             metrics["top_bridges"], columns=["Concept", "Bridge Score"]
         )
-        st.dataframe(bridge_df, use_container_width=True)
+        st.dataframe(bridge_df, width="stretch")
 
 
 # ============================================================================
@@ -5234,7 +5234,7 @@ def render_reasoning_dashboard(
             columns=['Relationship Type', 'Count'],
         )
         rel_df = rel_df.sort_values('Count', ascending=False)
-        st.dataframe(rel_df, use_container_width=True)
+        st.dataframe(rel_df, width="stretch")
         fig = px.bar(
             rel_df, x='Relationship Type', y='Count',
             title="Edge Type Distribution",
@@ -5264,7 +5264,7 @@ def render_reasoning_dashboard(
                     "Path": " → ".join(paths[0]),
                 })
     if chains_found:
-        st.dataframe(pd.DataFrame(chains_found), use_container_width=True)
+        st.dataframe(pd.DataFrame(chains_found), width="stretch")
     else:
         st.info(
             "No direct inference chains found. "
@@ -5290,7 +5290,7 @@ def render_reasoning_dashboard(
                 else ("⚠️" if resolved else "❌")
             ),
         })
-    st.dataframe(pd.DataFrame(syn_data), use_container_width=True)
+    st.dataframe(pd.DataFrame(syn_data), width="stretch")
     st.subheader("🏛️ Concept Hierarchy")
     hierarchy_data: List[Dict[str, str]] = []
     for concept in valid_concepts[:20]:
@@ -5311,7 +5311,7 @@ def render_reasoning_dashboard(
                         })
     if hierarchy_data:
         st.dataframe(
-            pd.DataFrame(hierarchy_data), use_container_width=True,
+            pd.DataFrame(hierarchy_data), width="stretch",
         )
     else:
         st.info(
@@ -5542,18 +5542,18 @@ def render_batch_processing_controls() -> None:
     col_next, col_all = st.columns(2)
     with col_next:
         if st.button(
-            "▶️ Next batch", use_container_width=True,
+            "▶️ Next batch", width="stretch",
             disabled=bool(bs and bs.get("done")),
         ):
             st.session_state["batch_trigger"] = "next"
     with col_all:
         if st.button(
-            "⏩ All remaining", use_container_width=True,
+            "⏩ All remaining", width="stretch",
             disabled=bool(bs and bs.get("done")),
         ):
             st.session_state["batch_trigger"] = "all"
     if bs:
-        if st.button("🗑️ Reset batch state", use_container_width=True):
+        if st.button("🗑️ Reset batch state", width="stretch"):
             reset_batch_state(clear_analysis=True)
             st.success("Batch state cleared!")
             st.rerun()
@@ -6718,65 +6718,196 @@ class LLMQueryAnalyzer(ABC):
 
 class FallbackAnalyzer(LLMQueryAnalyzer):
     PROBLEM_KEYWORDS = {
-        SIBCoreProblem.ANODE_BOTTLENECK: {"anode", "hard carbon", "graphite", "intercalation", "alloying", "ice", "initial coulombic efficiency"},
-        SIBCoreProblem.CATHODE_INSTABILITY: {"cathode", "layered oxide", "phase transition", "p2", "o2", "o3", "structural", "degradation", "doping"},
-        SIBCoreProblem.SEI_CHEMISTRY: {"sei", "solid electrolyte interphase", "electrolyte", "interface", "passivation", "decomposition", "fluorinated"},
-        SIBCoreProblem.SOLID_STATE_INTERFACE: {"solid state", "solid electrolyte", "nasicon", "sulfide", "contact", "dendrite", "void", "delamination"},
-        SIBCoreProblem.LOW_ENERGY_DENSITY: {"energy density", "wh/kg", "specific energy", "voltage", "capacity", "full cell", "n/p ratio"},
-        SIBCoreProblem.MOISTURE_MANUFACTURING: {"moisture", "humidity", "hygroscopic", "surface alkalinity", "slurry", "coating", "manufacturing", "dry room"},
+        SIBCoreProblem.ANODE_BOTTLENECK: {
+            "anode", "hard carbon", "graphite", "intercalation", "alloying", 
+            "ice", "initial coulombic efficiency", "sodium", "na metal",
+            "na-ion", "na ion", "sodium ion", "dendrite", "plating", "stripping",
+            "capacity", "anode material", "carbon", "tin", "antimony", "sn", "sb",
+            "na", "metal anode", "alloy", "volume expansion", "pulverization"
+        },
+        SIBCoreProblem.CATHODE_INSTABILITY: {
+            "cathode", "layered oxide", "phase transition", "p2", "o2", "o3", 
+            "structural", "degradation", "doping", "oxide", "mno2", "nvp",
+            "prussian blue", "nasicon", "cathode material", "voltage", "capacity fade",
+            "mn", "co", "ni", "fe", "po4", "phosphate", "oxide cathode"
+        },
+        SIBCoreProblem.SEI_CHEMISTRY: {
+            "sei", "solid electrolyte interphase", "electrolyte", "interface", 
+            "passivation", "decomposition", "fluorinated", "ec", "dec", "pc",
+            "additive", "salt", "naclo4", "napf6", "interphase", "cei",
+            "solid electrolyte", "liquid electrolyte", "organic electrolyte"
+        },
+        SIBCoreProblem.SOLID_STATE_INTERFACE: {
+            "solid state", "solid electrolyte", "nasicon", "sulfide", "contact", 
+            "dendrite", "void", "delamination", "all solid state", "assb",
+            "interface resistance", "grain boundary", "polymer electrolyte",
+            "ceramic", "na3ps4", "sulfide electrolyte"
+        },
+        SIBCoreProblem.LOW_ENERGY_DENSITY: {
+            "energy density", "wh/kg", "specific energy", "voltage", "capacity", 
+            "full cell", "n/p ratio", "np ratio", "practical", "commercial",
+            "energy", "power density", "wh/l", "gravimetric", "volumetric"
+        },
+        SIBCoreProblem.MOISTURE_MANUFACTURING: {
+            "moisture", "humidity", "hygroscopic", "surface alkalinity", "slurry", 
+            "coating", "manufacturing", "dry room", "production", "scale up",
+            "industrial", "cost", "processing", "electrode fabrication", "cell assembly"
+        },
     }
-    def is_available(self) -> bool: return True
+
+    def is_available(self) -> bool: 
+        return True
 
     def analyze_query(self, query: str, ontology: Any) -> QueryAnalysisResult:
         q = query.lower().strip()
-        problem_scores = {p: sum(1 for kw in kws if kw in q) for p, kws in self.PROBLEM_KEYWORDS.items()}
-        primary = max(problem_scores, key=problem_scores.get) if sum(problem_scores.values()) > 0 else SIBCoreProblem.GENERAL
-        secondary = [p for p, s in sorted(problem_scores.items(), key=lambda x: -x[1]) if s > 0 and p != primary][:2]
 
+        # Score problems
+        problem_scores = {p: 0 for p in SIBCoreProblem}
+        for p, kws in self.PROBLEM_KEYWORDS.items():
+            score = 0
+            for kw in kws:
+                if kw in q:
+                    score += 1
+            problem_scores[p] = score
+
+        total_score = sum(problem_scores.values())
+        if total_score > 0:
+            primary = max(problem_scores, key=problem_scores.get)
+            secondary = [p for p, s in sorted(problem_scores.items(), key=lambda x: -x[1]) if s > 0 and p != primary][:2]
+        else:
+            primary = SIBCoreProblem.GENERAL
+            secondary = []
+
+        # Extract concepts using multiple strategies
         explicitly_mentioned = []
-        for canonical, node in ontology.concepts.items():
-            if canonical.replace("_", " ") in q or any(syn.replace("_", " ") in q for syn in node.synonyms):
-                explicitly_mentioned.append(canonical)
+        seen = set()
 
+        # Strategy 1: n-gram resolution (1-4 grams)
+        words = re.findall(r'\b[a-z][a-z0-9\-\+]+\b', q)
+        for n in range(1, min(5, len(words)+1)):
+            for i in range(len(words)-n+1):
+                phrase = " ".join(words[i:i+n])
+                resolved = ontology.resolve_concept(phrase)
+                if resolved and resolved not in seen:
+                    explicitly_mentioned.append(resolved)
+                    seen.add(resolved)
+
+        # Strategy 2: Direct synonym matching
+        for canonical, node in ontology.concepts.items():
+            if canonical in seen:
+                continue
+            checks = [canonical] + list(node.synonyms)
+            for term in checks:
+                if term in q:
+                    explicitly_mentioned.append(canonical)
+                    seen.add(canonical)
+                    break
+
+        # Strategy 3: Substring matching for key SIB terms
+        sib_terms = {
+            "hard carbon": "hard_carbon", "sodium metal": "sodium_metal",
+            "layered oxide": "layered_oxide_cathode", "polyanionic": "polyanionic_cathode",
+            "prussian blue": "prussian_blue_analogue", "nasicon": "nasicon_cathode",
+            "sei": "sei_formation", "dendrite": "dendrite_growth",
+            "capacity": "specific_capacity", "energy density": "energy_density",
+            "coulombic efficiency": "coulombic_efficiency", "cycle life": "cycle_life",
+            "rate capability": "rate_capability", "ionic conductivity": "ionic_conductivity",
+            "voltage": "voltage_plateau", "intercalation": "intercalation",
+            "conversion": "conversion_reaction", "mxene": "mxene",
+            "full cell": "full_cell", "thermal runaway": "thermal_runaway",
+            "volume expansion": "volume_expansion", "pre-sodiation": "pre_sodiation",
+            "interface engineering": "interface_engineering", "aqueous": "aqueous_electrolyte",
+        }
+        for term, concept in sib_terms.items():
+            if term in q and concept not in seen:
+                explicitly_mentioned.append(concept)
+                seen.add(concept)
+
+        # Fallback: ensure at least the root concept is present
+        if not explicitly_mentioned:
+            explicitly_mentioned.append("sodium_ion_battery")
+            seen.add("sodium_ion_battery")
+
+        # Infer related concepts from problem definition
         inferred = []
-        if primary != SIBCoreProblem.GENERAL:
+        if primary != SIBCoreProblem.GENERAL and primary != SIBCoreProblem.MULTI_PROBLEM:
             pdef = SIB_PROBLEM_DEFINITIONS[primary]
             for concept in pdef.get_ontology_concepts():
-                if concept not in explicitly_mentioned and concept in ontology.concepts:
+                if concept not in seen and concept in ontology.concepts:
                     inferred.append(concept)
+                    seen.add(concept)
 
         all_relevant = list(dict.fromkeys(explicitly_mentioned + inferred))
+
+        # Build priorities
         priorities = {}
         pdef = SIB_PROBLEM_DEFINITIONS.get(primary, SIB_PROBLEM_DEFINITIONS[SIBCoreProblem.GENERAL])
         problem_concept_set = pdef.get_ontology_concepts()
 
         for concept in all_relevant:
             is_explicit = concept in explicitly_mentioned
+            base_score = 1.0 if is_explicit else 0.6
+            affinity = 1.0 if concept in problem_concept_set else 0.4
+            composite = base_score * 0.5 + affinity * 0.5
+
             priorities[concept] = ConceptPriority(
-                concept_name=concept, concept_type=ontology.get_concept_type(concept).value,
-                composite_score=(1.0 if is_explicit else 0.6) * 0.5 + (1.0 if concept in problem_concept_set else 0.4) * 0.5,
-                direct_score=1.0 if is_explicit else 0.6, problem_affinity_score=1.0 if concept in problem_concept_set else 0.4,
-                causal_path_score=0.5, is_explicitly_mentioned=is_explicit, is_inferred=not is_explicit,
+                concept_name=concept,
+                concept_type=ontology.get_concept_type(concept).value if concept in ontology.concepts else "general",
+                composite_score=composite,
+                direct_score=base_score,
+                problem_affinity_score=affinity,
+                causal_path_score=0.5,
+                is_explicitly_mentioned=is_explicit,
+                is_inferred=not is_explicit,
                 inference_reason="problem_affinity" if not is_explicit else "explicit_mention"
             )
 
+        # Determine query type
         query_type = "general"
-        if any(w in q for w in ["compare", "vs", "versus", "difference"]): query_type = "comparison"
-        elif any(w in q for w in ["why", "cause", "reason", "lead to"]): query_type = "causal"
-        elif any(w in q for w in ["how", "improve", "enhance", "optimize", "strategy"]): query_type = "solution"
+        if any(w in q for w in ["compare", "vs", "versus", "difference", "better than"]): 
+            query_type = "comparison"
+        elif any(w in q for w in ["why", "cause", "reason", "lead to", "results in"]): 
+            query_type = "causal"
+        elif any(w in q for w in ["how", "improve", "enhance", "optimize", "strategy", "solve"]): 
+            query_type = "solution"
+        elif any(w in q for w in ["what is", "define", "meaning", "explain"]):
+            query_type = "definition"
 
-        highlight_paths = [[src, tgt] for src, rel, tgt in pdef.key_relationships if src in ontology.concepts and tgt in ontology.concepts]
-        total = max(sum(problem_scores.values()), 1)
-        
+        # Build highlight paths from ontology relationships
+        highlight_paths = []
+        for src, rel, tgt in pdef.key_relationships:
+            if src in ontology.concepts and tgt in ontology.concepts:
+                highlight_paths.append([src, tgt])
+
+        confidence = min(total_score / 3.0, 1.0) if total_score > 0 else 0.3
+
         return QueryAnalysisResult(
-            original_query=query, normalized_query=q, primary_problem=primary, secondary_problems=secondary,
-            problem_confidences={p.value: s / total for p, s in problem_scores.items()},
-            explicitly_mentioned=explicitly_mentioned, inferred_concepts=inferred, all_relevant_concepts=all_relevant,
-            concept_priorities=priorities, query_type=query_type, emphasis_direction="cause" if query_type == "causal" else "neutral",
-            subgraph_depth=2, priority_threshold=0.3, focus_nodes=explicitly_mentioned[:5], bridge_nodes=inferred[:3],
-            suggested_layout="force" if query_type != "comparison" else "bisected", highlight_paths=highlight_paths,
-            visualization_focus=pdef.visualization_focus, reasoning_chain=[f"Query normalized: '{q}'", f"Primary problem: {primary.value}"],
-            confidence=min(sum(problem_scores.values()) / 3.0, 1.0)
+            original_query=query,
+            normalized_query=q,
+            primary_problem=primary,
+            secondary_problems=secondary,
+            problem_confidences={p.value: s / max(total_score, 1) for p, s in problem_scores.items()},
+            explicitly_mentioned=explicitly_mentioned,
+            inferred_concepts=inferred,
+            all_relevant_concepts=all_relevant,
+            concept_priorities=priorities,
+            query_type=query_type,
+            emphasis_direction="cause" if query_type == "causal" else "neutral",
+            subgraph_depth=2,
+            priority_threshold=0.25,
+            focus_nodes=explicitly_mentioned[:5] if explicitly_mentioned else ["sodium_ion_battery"],
+            bridge_nodes=inferred[:3] if inferred else [],
+            suggested_layout="force" if query_type != "comparison" else "bisected",
+            highlight_paths=highlight_paths,
+            visualization_focus=pdef.visualization_focus,
+            reasoning_chain=[
+                f"Query normalized: '{q}'",
+                f"Primary problem: {primary.value}",
+                f"Explicit concepts found: {len(explicitly_mentioned)}",
+                f"Inferred concepts: {len(inferred)}",
+                f"Query type: {query_type}",
+            ],
+            confidence=confidence
         )
 
 class OpenAIQueryAnalyzer(LLMQueryAnalyzer):
@@ -6873,6 +7004,7 @@ class LocalLLMQueryAnalyzer(LLMQueryAnalyzer):
                     pass
             else:
                 load_kwargs["torch_dtype"] = torch.float32
+                # Force CPU to avoid mysterious CUDA OOM on Cloud
                 load_kwargs["device_map"] = None
 
             model = AutoModelForCausalLM.from_pretrained(self.model_name, **load_kwargs)
@@ -6881,7 +7013,7 @@ class LocalLLMQueryAnalyzer(LLMQueryAnalyzer):
                 "text-generation",
                 model=model,
                 tokenizer=tokenizer,
-                max_new_tokens=512,  # Reduced from 1500 to save memory & time
+                max_new_tokens=256,  # Reduced further for speed & memory safety
                 temperature=0.1,
                 do_sample=True,
                 pad_token_id=tokenizer.eos_token_id,
@@ -7161,7 +7293,7 @@ class PriorityGuidedSubgraphExtractor:
         self.ontology = ontology
         self.expander = expander
 
-    def extract(self, analysis: QueryAnalysisResult) -> nx.Graph:
+    def extract(self, analysis: QueryAnalysisResult, max_nodes: int = 0) -> nx.Graph:
         boosted = self.expander.get_priority_boosted_scores(analysis.concept_priorities)
         concepts_above = analysis.get_concepts_above_threshold()
 
@@ -7189,6 +7321,12 @@ class PriorityGuidedSubgraphExtractor:
                     visited.add(neighbor)
                     depth_map[neighbor] = depth_map[current] + 1
                     frontier.append(neighbor)
+
+        # Pre-trim if too large using boosted scores
+        if max_nodes > 0 and len(visited) > max_nodes:
+            scored = [(n, boosted[n].composite_score if n in boosted else 0.0) for n in visited]
+            scored.sort(key=lambda x: x[1], reverse=True)
+            visited = {n for n, _ in scored[:max_nodes]}
 
         subgraph = self.full_graph.subgraph(visited).copy()
         for node in subgraph.nodes():
@@ -7594,7 +7732,11 @@ def render_llm_query_panel(ontology: Any, expander: DynamicOntologyExpander, ful
     st.sidebar.success(f"✅ Analysis complete (confidence: {getattr(analysis, 'confidence', 0):.0%})")
     primary = getattr(analysis, "primary_problem", None)
     st.sidebar.caption(f"Primary problem: **{primary.value if primary else 'general'}**")
-    st.sidebar.caption(f"Explicit concepts: {len(getattr(analysis, 'explicitly_mentioned', []))} | Inferred: {len(getattr(analysis, 'inferred_concepts', []))}")
+    n_explicit = len(getattr(analysis, 'explicitly_mentioned', []))
+    n_inferred = len(getattr(analysis, 'inferred_concepts', []))
+    st.sidebar.caption(f"Explicit concepts: {n_explicit} | Inferred: {n_inferred}")
+    if n_explicit == 0 and n_inferred == 0:
+        st.sidebar.warning("No concepts matched query. Using general SIB context.")
     if mutations.get("concepts_added"):
         st.sidebar.warning(f"🆕 {len(mutations['concepts_added'])} new concept(s) added")
         for c in mutations["concepts_added"]: st.sidebar.markdown(f"  - `{c.get('name', '?')}` ({c.get('type', '?')})")
@@ -7651,7 +7793,7 @@ def render_analysis_details(analysis: QueryAnalysisResult) -> None:
             if row.get("explicit", False): return ["background-color: #d4edda"] * len(row)
             elif row.get("inferred", False): return ["background-color: #fff3cd"] * len(row)
             return [""] * len(row)
-        st.dataframe(df.style.apply(highlight_row, axis=1), use_container_width=True)
+        st.dataframe(df.style.apply(highlight_row, axis=1), width="stretch")
 
 def render_llm_qa_tab(analysis_data: Dict, ontology: Any):
     st.subheader("🤖 LLM-Guided Graph Q&A")
@@ -7687,9 +7829,22 @@ def render_llm_qa_tab(analysis_data: Dict, ontology: Any):
             st.warning("Please enter a query.")
             return
 
+        # Memory cleanup before heavy LLM ops
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
         local_model = st.session_state.get("selected_local_model")
-        analyzer = factory.get_analyzer(mode=mode, local_model=local_model)
-        generator.analyzer = analyzer
+
+        # Load analyzer with OOM protection
+        analyzer = None
+        try:
+            analyzer = factory.get_analyzer(mode=mode, local_model=local_model)
+            generator.analyzer = analyzer
+        except Exception as e:
+            st.warning(f"Preferred analyzer failed ({e}). Falling back to rule-based.")
+            analyzer = FallbackAnalyzer()
+            generator.analyzer = analyzer
 
         # ── Stage 1: Query analysis ──────────────────────────────────
         analysis: Optional[QueryAnalysisResult] = None
@@ -7716,10 +7871,13 @@ def render_llm_qa_tab(analysis_data: Dict, ontology: Any):
                     st.error("No graph available for subgraph extraction.")
                     return
                 extractor = PriorityGuidedSubgraphExtractor(full_graph, ontology, expander)
-                subgraph = extractor.extract(analysis)
+                # Limit to 80 nodes to prevent browser / memory crash
+                subgraph = extractor.extract(analysis, max_nodes=80)
                 if subgraph is None or subgraph.number_of_nodes() == 0:
                     st.info("No focused subgraph could be extracted; using full graph fallback.")
                     subgraph = full_graph
+                elif subgraph.number_of_nodes() > 80:
+                    st.info(f"Subgraph trimmed from {subgraph.number_of_nodes()} to 80 highest-priority nodes.")
         except Exception as e:
             st.error(f"Subgraph extraction failed: {e}")
             subgraph = analysis_data.get("nx_graph")
@@ -7795,9 +7953,16 @@ def render_llm_qa_tab(analysis_data: Dict, ontology: Any):
                 spring_strength=spring_str,
                 damping=damp,
             )
-            st.components.v1.html(html, height=600, scrolling=True)
+            st.components.v1.html(html, height=550, scrolling=True)
         except Exception as e:
             st.warning(f"Subgraph visualisation failed: {e}")
+            # Fallback text summary
+            st.markdown("**Subgraph Summary (Text Fallback)**")
+            sg = subgraph if subgraph is not None else nx.Graph()
+            st.write(f"Nodes: {sg.number_of_nodes()} | Edges: {sg.number_of_edges()}")
+            if sg.number_of_nodes() > 0:
+                for node in list(sg.nodes())[:15]:
+                    st.write(f"- {node}")
 
         # ── Stage 5: Behind-the-scenes metadata ──────────────────────
         with st.expander("🔧 Behind the Scenes: Ontology Mutations & Reasoning"):
@@ -7888,7 +8053,7 @@ def main() -> None:
         df_filtered = df.copy()
     st.write(f"Working with **{len(df_filtered)}** records")
     with st.expander("Preview Data Structure"):
-        st.dataframe(df_filtered.head(5), use_container_width=True)
+        st.dataframe(df_filtered.head(5), width="stretch")
         st.markdown("**Available columns:**")
         st.write(list(df_filtered.columns))
 
@@ -7916,7 +8081,7 @@ def main() -> None:
     # --- RUN ANALYSIS ---
     build_clicked = st.button(
         "🚀 Build Concept Graph with Reasoning",
-        type="primary", use_container_width=True,
+        type="primary", width="stretch",
     )
     batch_trigger = st.session_state.pop("batch_trigger", None)
     batch_mode_on = st.session_state.get("batch_mode", False)
@@ -8453,7 +8618,7 @@ def main() -> None:
                 key="distill_top_n",
             )
             display_df = distill_df.head(top_n)
-            st.dataframe(display_df, use_container_width=True)
+            st.dataframe(display_df, width="stretch")
             st.markdown("**Efficiency vs Frequency:**")
             chart_df = display_df.set_index('concept')[['distillation_efficiency']]
             st.bar_chart(chart_df)
@@ -8485,7 +8650,7 @@ def main() -> None:
                         'gnn_affinity', 'semantic_novelty',
                         'expected_property_gain', 'feasibility_score',
                     ]].head(20),
-                    use_container_width=True,
+                    width="stretch",
                 )
                 csv_scores = top_scores.to_csv(index=False).encode('utf-8')
                 st.download_button(
@@ -8640,7 +8805,7 @@ def main() -> None:
                     concept_list_df['definition'] != ''
                 ][['concept', 'definition', 'category']]
                 if not defs_df.empty:
-                    st.dataframe(defs_df, use_container_width=True)
+                    st.dataframe(defs_df, width="stretch")
                 else:
                     st.info(
                         "No definitions available. "
@@ -8699,7 +8864,7 @@ def main() -> None:
             with st.expander("Keyword Burst Detection", expanded=True):
                 burst_df = st.session_state.get('burst_df')
                 if burst_df is not None and not burst_df.empty:
-                    st.dataframe(burst_df.head(20), use_container_width=True)
+                    st.dataframe(burst_df.head(20), width="stretch")
                     fig = px.bar(
                         burst_df.head(15), x='concept', y='burst_score',
                         color='burst_year',
@@ -8721,7 +8886,7 @@ def main() -> None:
             with st.expander("Semantic Drift Detection"):
                 drift_df = st.session_state.get('drift_df')
                 if drift_df is not None and not drift_df.empty:
-                    st.dataframe(drift_df.head(20), use_container_width=True)
+                    st.dataframe(drift_df.head(20), width="stretch")
                     fig = px.bar(
                         drift_df.head(15), x='concept', y='semantic_drift',
                         title=(
@@ -8745,7 +8910,7 @@ def main() -> None:
                 genealogy_df = st.session_state.get('genealogy_df')
                 if genealogy_df is not None and not genealogy_df.empty:
                     st.dataframe(
-                        genealogy_df.head(20), use_container_width=True,
+                        genealogy_df.head(20), width="stretch",
                     )
                     gen_counts = genealogy_df['generation'].value_counts()
                     fig = px.pie(
@@ -8759,7 +8924,7 @@ def main() -> None:
                 bridge_df = st.session_state.get('bridge_df')
                 if bridge_df is not None and not bridge_df.empty:
                     st.dataframe(
-                        bridge_df.head(20), use_container_width=True,
+                        bridge_df.head(20), width="stretch",
                     )
                     fig = px.scatter(
                         bridge_df.head(30),
@@ -8798,7 +8963,7 @@ def main() -> None:
                             columns=['Concept', 'Degree', 'Clustering'],
                         )
                         st.dataframe(
-                            star_df, use_container_width=True,
+                            star_df, width="stretch",
                         )
                 else:
                     st.info("No motif data available.")
@@ -8808,7 +8973,7 @@ def main() -> None:
                 )
                 if not centrality_df.empty:
                     st.dataframe(
-                        centrality_df.head(20), use_container_width=True,
+                        centrality_df.head(20), width="stretch",
                     )
                     corr_cols = [
                         'degree', 'betweenness', 'closeness',
