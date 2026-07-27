@@ -4,3 +4,21 @@
 R1 : Static LLM dealing with six main scientific fields of Na-ion Battery
 
 [![meaningtowords](https://img.shields.io/badge/naionbatteryllmcg-v1.0-green)](https://llm-guided-na-ion-battery-concept-graph1.streamlit.app/) (Static code that does not read the json database)
+
+R2-R3 : The json file is read by the app
+
+[![meaningtowords](https://img.shields.io/badge/naionbatteryllmcg-v2.0-yellow)](https://llm-guided-na-ion-battery-concept-graph2.streamlit.app/)
+
+[![meaningtowords](https://img.shields.io/badge/naionbatteryllmcg-v3.0-yellow)](https://llm-guided-na-ion-battery-concept-graph3.streamlit.app/)
+
+R4- R5 
+
+[![meaningtowords](https://img.shields.io/badge/naionbatteryllmcg-v4.0-turquoise)](https://llm-guided-na-ion-battery-concept-graph4.streamlit.app/)
+
+[![meaningtowords](https://img.shields.io/badge/naionbatteryllmcg-v5.0-turquoise)](https://llm-guided-na-ion-battery-concept-graph5.streamlit.app/)
+
+R6-R7
+
+[![meaningtowords](https://img.shields.io/badge/naionbatteryllmcg-v6.0-red)](https://llm-guided-na-ion-battery-concept-graph6.streamlit.app/) (Basic Version, The LLM learns from Concept Graph to Respond to the User's Query)
+
+[![meaningtowords](https://img.shields.io/badge/naionbatteryllmcg-v7.0-red)](https://llm-guided-na-ion-battery-concept-graph7.streamlit.app/) (Advanced Version, The LLM learns from Concept Graph to Respond to the User's Query)
