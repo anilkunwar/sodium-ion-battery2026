@@ -7176,21 +7176,17 @@ class QueryDrivenVisualizer:
                      damping: float = 0.95) -> str:
         from pyvis.network import Network
         net = Network(height=height, width="100%", directed=True, notebook=False, cdn_resources="remote")
-
-        # Apply custom physics to prevent jiggling
         if physics_enabled:
             net.barnes_hut(
                 gravity=gravity,
                 central_gravity=central_gravity,
                 spring_length=spring_length,
                 spring_strength=spring_strength,
-                damping=damping,  # High damping (0.9+) is the secret to stopping jiggling
+                damping=damping,
                 overlap=0.1
             )
         else:
-            # Completely disable physics if requested
             net.set_options('{"physics": {"enabled": false}, "interaction": {"hover": true, "dragNodes": true, "dragView": true, "zoomView": true}}')
-
         for node, attrs in subgraph.nodes(data=True):
             concept_type = attrs.get("concept_type", "general")
             priority = attrs.get("priority_score", 0.2)
@@ -7198,25 +7194,20 @@ class QueryDrivenVisualizer:
             is_llm_added = attrs.get("is_llm_added", False)
             size = 15 + priority * 35
             color = self.type_colors.get(concept_type, "#A8D8EA")
-
             if is_explicit: border_width, border_color, shape = 4, "#FF0000", "dot"
             elif is_llm_added: border_width, border_color, shape = 3, "#00FF00", "diamond"
             else: border_width, border_color, shape = 1, "#666666", "dot"
-
-            title = f"<b>{node}</b><br>Type: {concept_type}<br>Priority: {priority:.2f}"
+            title = "<b>" + node + "</b><br>Type: " + concept_type + "<br>Priority: " + str(round(priority, 2))
             if is_llm_added: title += "<br>⚠️ LLM-inferred concept"
             defn = attrs.get("definition", "")
-            if defn: title += f"<br><i>{defn[:150]}...</i>"
-
+            if defn: title += "<br><i>" + defn[:150] + "...</i>"
             net.add_node(node, label=node.replace("_", " ").title(), size=size, color=color, border_width=border_width, border_color=border_color, shape=shape, title=title, font={"size": 10 + priority * 6})
-
         for u, v, attrs in subgraph.edges(data=True):
             color = attrs.get("color", "#888888")
             width = attrs.get("width", 1.0)
             highlighted = any(len(p) >= 2 and ((p[0] == u and p[1] == v) or (p[1] == u and p[0] == v)) for p in analysis.highlight_paths)
             if highlighted: color, width = "#FF0000", max(width, 4.0)
-            net.add_edge(u, v, color=color, width=width, dashes=attrs.get("style") == "dashed" or attrs.get("inferred", False), title=f"{u} → {v}<br>Type: {attrs.get('edge_type','unknown')}", arrows="to")
-
+            net.add_edge(u, v, color=color, width=width, dashes=attrs.get("style") == "dashed" or attrs.get("inferred", False), title=u + " → " + v + "<br>Type: " + attrs.get('edge_type','unknown'), arrows="to")
         with tempfile.NamedTemporaryFile(mode='w', suffix='.html', delete=False, encoding='utf-8') as f:
             net.save_graph(f.name)
             return Path(f.name).read_text(encoding='utf-8')
@@ -7227,36 +7218,32 @@ class GraphRAGAnswerGenerator:
     def generate_ground_response(self, query: str, analysis: QueryAnalysisResult, subgraph: nx.Graph, concept_abstract_map: Dict[str, List[int]], all_texts: Union[List[str], Dict[int, str]], max_docs_per_concept: int = 2) -> str:
         top_nodes = sorted(subgraph.nodes(data=True), key=lambda x: x[1].get("priority_score", 0.0), reverse=True)[:5]
         evidence_snippets = []
-
         for node, attrs in top_nodes:
             doc_indices = concept_abstract_map.get(node, [])[:max_docs_per_concept]
             for idx in doc_indices:
-                # Memory-safe v6.1 Patch 1 compatibility
                 if isinstance(all_texts, dict):
                     text = all_texts.get(idx, "")
                 else:
                     text = all_texts[idx] if 0 <= idx < len(all_texts) else ""
-
                 if text:
                     clean_text = re.sub(r'\s+', ' ', text).strip()[:400]
-                    evidence_snippets.append(f"- **{node}**: {clean_text}...")
-
-        prompt = f"""You are an expert Sodium-Ion Battery (SIB) researcher. Answer the user's query based *strictly* on the provided graph context and evidence snippets.
-User Query: "{query}"
-Identified Core Problem: {analysis.primary_problem.value.replace('_', ' ').title()}
-Key Graph Concepts: {', '.join([n for n, _ in top_nodes])}
-Evidence Snippets from Literature:
-{chr(10).join(evidence_snippets) if evidence_snippets else "No direct text snippets found. Rely on your general SIB knowledge but note the lack of specific retrieved context."}
-Instructions:
-1. Provide a direct, scientifically accurate answer (2-3 paragraphs).
-2. Explicitly mention how the key concepts interact (e.g., causal chains like 'A influences B').
-3. If the retrieved evidence is insufficient, state what specific data is missing."""
-
-        # Pass all necessary variables to the LLM caller
+                    evidence_snippets.append("- **" + node + "**: " + clean_text + "...")
+        nl = chr(10)
+        prompt = "You are an expert Sodium-Ion Battery (SIB) researcher. Answer the user's query based *strictly* on the provided graph context and evidence snippets." + nl
+        prompt += "User Query: " + repr(query) + nl
+        prompt += "Identified Core Problem: " + analysis.primary_problem.value.replace("_", " ").title() + nl
+        prompt += "Key Graph Concepts: " + ", ".join([n for n, _ in top_nodes]) + nl
+        prompt += "Evidence Snippets from Literature:" + nl
+        if evidence_snippets:
+            prompt += nl.join(evidence_snippets) + nl
+        else:
+            prompt += "No direct text snippets found. Rely on your general SIB knowledge but note the lack of specific retrieved context." + nl
+        prompt += "Instructions:" + nl
+        prompt += "1. Provide a direct, scientifically accurate answer (2-3 paragraphs)." + nl
+        prompt += "2. Explicitly mention how the key concepts interact (e.g., causal chains like 'A influences B')." + nl
+        prompt += "3. If the retrieved evidence is insufficient, state what specific data is missing."
         if isinstance(self.analyzer, OpenAIQueryAnalyzer) and self.analyzer.is_available():
             return self._call_llm_for_answer(prompt, self.analyzer, query, analysis, top_nodes, evidence_snippets)
-
-        # Fallback for LocalLLM or if OpenAI is unavailable
         return self._generate_fallback_answer(query, analysis, top_nodes, evidence_snippets)
 
     def _call_llm_for_answer(self, prompt: str, analyzer: LLMQueryAnalyzer, query: str, analysis: QueryAnalysisResult, top_nodes, evidence_snippets) -> str:
@@ -7271,41 +7258,22 @@ Instructions:
                 )
                 return response.choices[0].message.content
             except Exception as e:
-                # If API fails, gracefully fallback instead of crashing
-                return f"⚠️ LLM API Error: {e}
-
-" + self._generate_fallback_answer(query, analysis, top_nodes, evidence_snippets)
-
-        # If client is None, fallback
+                fallback_text = self._generate_fallback_answer(query, analysis, top_nodes, evidence_snippets)
+                return "⚠️ LLM API Error: " + str(e) + chr(10) + chr(10) + fallback_text
         return self._generate_fallback_answer(query, analysis, top_nodes, evidence_snippets)
 
     def _generate_fallback_answer(self, query: str, analysis: QueryAnalysisResult, top_nodes, snippets: List[str]) -> str:
-        # analysis is now guaranteed to be a valid QueryAnalysisResult object
-        response = f"### Analysis of: '{query}'
-
-"
-        response += f"**Core Problem Identified:** {analysis.primary_problem.value.replace('_', ' ').title()}
-
-"
-        response += f"**Key Concepts in Focus:**
-" + "
-".join([f"- **{node}** ({attrs.get('concept_type', 'general')}): Priority Score {attrs.get('priority_score', 0):.2f}" for node, attrs in top_nodes])
-
+        nl = chr(10)
+        response = "### Analysis of: '" + query + "'" + nl + nl
+        response += "**Core Problem Identified:** " + analysis.primary_problem.value.replace("_", " ").title() + nl + nl
+        response += "**Key Concepts in Focus:**" + nl
+        response += nl.join(["- **" + node + "** (" + attrs.get("concept_type", "general") + "): Priority Score " + str(round(attrs.get("priority_score", 0), 2)) for node, attrs in top_nodes])
         if snippets:
-            response += "
-**Retrieved Evidence Context:**
-" + "
-".join(snippets[:3]) + "
-"
+            response += nl + "**Retrieved Evidence Context:**" + nl + nl.join(snippets[:3]) + nl
         else:
-            response += "
-*Note: No direct text snippets were linked to these concepts in the current dataset.*
-"
-
-        response += "
-**System Reasoning Chain:**
-" + "
-".join([f"- {step}" for step in analysis.reasoning_chain])
+            response += nl + "*Note: No direct text snippets were linked to these concepts in the current dataset.*" + nl
+        response += nl + "**System Reasoning Chain:**" + nl
+        response += nl.join(["- " + step for step in analysis.reasoning_chain])
         return response
 
 class QuerySessionManager:
@@ -7495,8 +7463,6 @@ def render_llm_qa_tab(analysis_data: Dict, ontology: Any):
         st.markdown("---")
         st.markdown("---")
         st.markdown("### 🕸️ Focused Subgraph Visualization")
-
-        # --- NEW: Physics Customization Panel ---
         with st.expander("⚙️ Subgraph Physics Settings (Prevent Jiggling)", expanded=False):
             phys_preset = st.selectbox(
                 "Physics Preset",
@@ -7505,7 +7471,6 @@ def render_llm_qa_tab(analysis_data: Dict, ontology: Any):
                 key="subgraph_phys_preset",
                 help="'Stable' uses high damping to stop oscillation. 'Off' freezes the layout."
             )
-            # Presets mapped to PyVis barnes_hut parameters
             presets = {
                 "Stable (No Jiggle)": {"gravity": -800, "central_gravity": 0.1, "spring_length": 120, "spring_strength": 0.02, "damping": 0.95},
                 "Fluid": {"gravity": -500, "central_gravity": 0.2, "spring_length": 150, "spring_strength": 0.04, "damping": 0.8},
@@ -7513,7 +7478,6 @@ def render_llm_qa_tab(analysis_data: Dict, ontology: Any):
                 "Off": {"gravity": 0, "central_gravity": 0, "spring_length": 100, "spring_strength": 0, "damping": 0.99},
             }
             p = presets[phys_preset]
-
             col1, col2 = st.columns(2)
             with col1:
                 grav = st.slider("Gravity (Repulsion)", -5000, 0, p["gravity"], step=100, key="sub_grav")
@@ -7523,8 +7487,6 @@ def render_llm_qa_tab(analysis_data: Dict, ontology: Any):
                 cent_grav = st.slider("Central Gravity", 0.0, 1.0, p["central_gravity"], step=0.05, key="sub_cgrav")
                 spring_str = st.slider("Spring Strength", 0.0, 0.5, p["spring_strength"], step=0.01, key="sub_sstr")
                 phys_on = st.checkbox("Enable Physics", value=(phys_preset != "Off"), key="sub_phys_on")
-
-        # Render with custom physics
         visualizer = QueryDrivenVisualizer(ontology)
         html = visualizer.render_pyvis(
             subgraph, analysis,
@@ -7536,14 +7498,13 @@ def render_llm_qa_tab(analysis_data: Dict, ontology: Any):
             damping=damp
         )
         st.components.v1.html(html, height=600, scrolling=True)
-
         with st.expander("🔧 Behind the Scenes: Ontology Mutations & Reasoning"):
             st.markdown("**Reasoning Chain:**")
-            for step in analysis.reasoning_chain: st.markdown(f"- {step}")
+            for step in analysis.reasoning_chain: st.markdown("- " + step)
             if mutations.get("concepts_added") or mutations.get("bridges_created"):
                 st.markdown("**Dynamic Ontology Updates:**")
-                for c in mutations.get("concepts_added", []): st.markdown(f"➕ Added Concept: `{c['name']}` ({c['type']})")
-                for b in mutations.get("bridges_created", []): st.markdown(f"🌉 Created Bridge: `{b['bridge']}` for `{b['for']}`")
+                for c in mutations.get("concepts_added", []): st.markdown("➕ Added Concept: `" + c['name'] + "` (" + c['type'] + ")")
+                for b in mutations.get("bridges_created", []): st.markdown("🌉 Created Bridge: `" + b['bridge'] + "` for `" + b['for'] + "`")
 def main() -> None:
     st.title(
         "🔋 Sodium-Ion Battery Quantitative Descriptor Graph v6.2"
