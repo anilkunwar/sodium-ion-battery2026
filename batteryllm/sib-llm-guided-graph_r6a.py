@@ -7118,7 +7118,7 @@ class PriorityGuidedSubgraphExtractor:
         self.ontology = ontology
         self.expander = expander
 
-def extract(self, analysis: QueryAnalysisResult) -> nx.Graph:
+    def extract(self, analysis: QueryAnalysisResult) -> nx.Graph:
         boosted = self.expander.get_priority_boosted_scores(analysis.concept_priorities)
         concepts_above = analysis.get_concepts_above_threshold()
 
@@ -7127,9 +7127,9 @@ def extract(self, analysis: QueryAnalysisResult) -> nx.Graph:
         seed_nodes = {n for n in raw_seed_nodes if n in self.full_graph}
         seed_set = set(seed_nodes)
 
-        visited: Set[str] = set(seed_nodes)
-        frontier: deque = deque(seed_nodes)
-        depth_map: Dict[str, int] = {n: 0 for n in seed_nodes}
+        visited = set(seed_nodes)
+        frontier = deque(seed_nodes)
+        depth_map = {n: 0 for n in seed_nodes}
         max_depth = analysis.subgraph_depth
         threshold = analysis.priority_threshold
 
@@ -7195,12 +7195,13 @@ def extract(self, analysis: QueryAnalysisResult) -> nx.Graph:
                 })
 
         return subgraph
+
 class QueryDrivenVisualizer:
     def __init__(self, ontology: Any):
         self.ontology = ontology
         self.type_colors = {"material": "#FF6B6B", "property": "#4ECDC4", "phenomenon": "#FFE66D", "method": "#95E1D3", "parameter": "#F38181", "process": "#AA96DA", "model": "#FCBAD3", "general": "#A8D8EA"}
 
-def render_pyvis(self, subgraph: nx.Graph, analysis: QueryAnalysisResult, height: str = "700px",
+    def render_pyvis(self, subgraph: nx.Graph, analysis: QueryAnalysisResult, height: str = "700px",
                      physics_enabled: bool = True,
                      gravity: float = -800.0,
                      central_gravity: float = 0.1,
@@ -7309,6 +7310,7 @@ def render_pyvis(self, subgraph: nx.Graph, analysis: QueryAnalysisResult, height
         with tempfile.NamedTemporaryFile(mode='w', suffix='.html', delete=False, encoding='utf-8') as f:
             net.save_graph(f.name)
             return Path(f.name).read_text(encoding='utf-8')
+
 class GraphRAGAnswerGenerator:
     def __init__(self, analyzer: LLMQueryAnalyzer):
         self.analyzer = analyzer
@@ -7631,6 +7633,7 @@ def render_llm_qa_tab(analysis_data: Dict, ontology: Any):
                 st.markdown("**Dynamic Ontology Updates:**")
                 for c in mutations.get("concepts_added", []): st.markdown("➕ Added Concept: `" + c['name'] + "` (" + c['type'] + ")")
                 for b in mutations.get("bridges_created", []): st.markdown("🌉 Created Bridge: `" + b['bridge'] + "` for `" + b['for'] + "`")
+
 def main() -> None:
     st.title(
         "🔋 Sodium-Ion Battery Quantitative Descriptor Graph v6.2"
