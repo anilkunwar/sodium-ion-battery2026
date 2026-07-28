@@ -21,7 +21,16 @@ R6-R7 (Full Graph First without Query and Sub-graph from Query to LLM)
 
 [![meaningtowords](https://img.shields.io/badge/naionbatteryllmcg-v6.0-red)](https://llm-guided-na-ion-battery-concept-graph6.streamlit.app/) (Basic Version, The LLM learns from Concept Graph to Respond to the User's Query, The  subgraph is a pre-computed visualization tied to the problem category (e.g. anode_bottleneck), not dynamically constructed from the query content. This is why it appears generic and not distinct to the specific question about sodium vs lithium intercalation in graphite.)
 
+[![meaningtowords](https://img.shields.io/badge/naionbatteryllmcg-v6.a-red)](https://llm-guided-na-ion-battery-concept-graph6a.streamlit.app/) (Basic Version, The LLM learns from Concept Graph to Respond to the User's Query, The  subgraph is a pre-computed visualization tied to the problem category (e.g. anode_bottleneck), not dynamically constructed from the query content. This is why it appears generic and not distinct to the specific question about sodium vs lithium intercalation in graphite.)
+
 [![meaningtowords](https://img.shields.io/badge/naionbatteryllmcg-v7.0-red)](https://llm-guided-na-ion-battery-concept-graph7.streamlit.app/) (Advanced Version, The LLM learns from Concept Graph to Respond to the User's Query, OOM for LLM-Guided Q&A)
 
 
 R8-R9 (Query Distilled Concept Graph Construction)
+
+[![meaningtowords](https://img.shields.io/badge/naionbatteryllmcg-v8.0-blue)](https://llm-guided-na-ion-battery-concept-graph8.streamlit.app/) (Query-distilled option but does't take query at first, The LLM learns from Concept Graph to Respond to the User's Query, The  subgraph is a pre-computed visualization tied to the problem category (e.g. anode_bottleneck), not dynamically constructed from the query content. This is why it appears generic and not distinct to the specific question about sodium vs lithium intercalation in graphite.)
+
+[![meaningtowords](https://img.shields.io/badge/naionbatteryllmcg-v8.a-blue)](https://llm-guided-na-ion-battery-concept-graph8a.streamlit.app/) (Query-distilled option and takes query at first, The LLM learns from Concept Graph to Respond to the User's Query, The  subgraph is a pre-computed visualization tied to the problem category (e.g. anode_bottleneck), not dynamically constructed from the query content. This is why it appears generic and not distinct to the specific question about sodium vs lithium intercalation in graphite.)
+
+[![meaningtowords](https://img.shields.io/badge/naionbatteryllmcg-v9.0-blue)](https://llm-guided-na-ion-battery-concept-graph9.streamlit.app/) (Query-distilled option and takes query at first, The LLM learns from Concept Graph to Respond to the User's Query, The  subgraph is a pre-computed visualization tied to the problem category (e.g. anode_bottleneck), not dynamically constructed from the query content. This is why it appears generic and not distinct to the specific question about sodium vs lithium intercalation in graphite.)
+
