@@ -1620,7 +1620,7 @@ class EnhancedConceptExtractor:
         ]
 
     @timed
-    def extract_from_text(self, text: str, doc_id: int = 0) -> List[str]:
+    def extract_from_text(self, text: str, doc_id: int = 0, allowed_concepts: Optional[Set[str]] = None) -> List[str]:
         concepts: Set[str] = set()
         text_lower = text.lower()
 
@@ -1637,12 +1637,18 @@ class EnhancedConceptExtractor:
                 if len(concept) > 3:
                     canonical = self.resolver.resolve(concept, context=text[:200])
                     if canonical:
+                        if allowed_concepts is not None and canonical not in allowed_concepts:
+                            continue
                         concepts.add(canonical)
                     else:
+                        if allowed_concepts is not None:
+                            continue   # skip unresolved concepts in focused mode
                         concepts.add(concept)
 
         # 2. Localized Context Window Extraction (Prevents Memory issue)
         context_concepts = self._extract_from_context_windows(text)
+        if allowed_concepts is not None:
+            context_concepts = {c for c in context_concepts if c in allowed_concepts}
         concepts.update(context_concepts)
 
         # 3. Batch resolve remaining raw concepts (limit to 50 to prevent OOM)
@@ -1655,8 +1661,12 @@ class EnhancedConceptExtractor:
             resolved_map = self.resolver.resolve_batch(raw_list, context="")
             for raw, canonical in resolved_map.items():
                 if canonical:
+                    if allowed_concepts is not None and canonical not in allowed_concepts:
+                        continue
                     concepts.add(canonical)
                 else:
+                    if allowed_concepts is not None:
+                        continue
                     concepts.add(raw)
 
         # Update tracking
@@ -1948,6 +1958,20 @@ class ReasoningEnhancedGraphBuilder:
 # ============================================================================
 def compute_text_hash(text: str) -> str:
     return hashlib.md5(text.encode('utf-8')).hexdigest()
+
+
+def build_query_whitelist(st_session):
+    if not st_session.get('query_focused_build', False):
+        return None
+    analysis = st_session.get('last_query_analysis')
+    if analysis is None:
+        st.warning("No query analysis available – falling back to full graph.")
+        return None
+    whitelist = set(analysis.explicitly_mentioned)
+    whitelist.update(analysis.inferred_concepts)
+    whitelist.update(st_session.get('last_query_dynamic_concepts', set()))
+    whitelist.update(st_session.get('last_query_bridge_concepts', {}).keys())
+    return whitelist
 
 
 def get_adaptive_config(num_abstracts: int) -> Dict[str, Any]:
@@ -6010,6 +6034,17 @@ def render_sidebar() -> None:
             options=list(THEME_PRESETS.keys()),
             index=0,
         )
+
+        st.subheader("🔍 Query-Focused Graph Mode")
+        query_focused_enabled = st.checkbox("Build graph only for current query concepts", key="query_focused_build")
+        if query_focused_enabled:
+            whitelist = st.session_state.get('last_query_whitelist', set())
+            if whitelist:
+                st.success(f"Will extract {len(whitelist)} focused concepts")
+                with st.expander("Preview whitelisted concepts"):
+                    st.write(sorted(whitelist))
+            else:
+                st.info("Ask a question in the 🤖 LLM-Guided Q&A tab to generate a whitelist.")
         theme = THEME_PRESETS[st.session_state['theme']]
         st.subheader("🔬 Sodium-Ion Battery Focus Areas")
         st.markdown("- **Cathode Materials:** Layered oxides (NaMnO₂), Polyanionic (Na₃V₂(PO₄)₃), Prussian blue analogues, NASICON")
@@ -7355,6 +7390,17 @@ def render_llm_query_panel(ontology: Any, expander: DynamicOntologyExpander, ful
     with st.sidebar.spinner("Expanding ontology..."):
         mutations = expander.apply_query_analysis(analysis, analyzer)
 
+    # Store whitelist for query-focused rebuild
+    whitelist = set(analysis.explicitly_mentioned)
+    whitelist.update(analysis.inferred_concepts)
+    whitelist.update(expander.session_concepts_added)
+    whitelist.update(expander.query_bridge_concepts.keys())
+    st.session_state['last_query_analysis'] = analysis
+    st.session_state['last_query_text'] = query
+    st.session_state['last_query_whitelist'] = whitelist
+    st.session_state['last_query_dynamic_concepts'] = expander.session_concepts_added
+    st.session_state['last_query_bridge_concepts'] = expander.query_bridge_concepts
+
     QuerySessionManager.record_query(query, analysis, mutations)
 
     st.sidebar.success(f"✅ Analysis complete (confidence: {analysis.confidence:.0%})")
@@ -7444,7 +7490,24 @@ def render_llm_qa_tab(analysis_data: Dict, ontology: Any):
         with st.spinner("🧠 Analyzing query and expanding ontology..."):
             analysis = analyzer.analyze_query(query, ontology)
             mutations = expander.apply_query_analysis(analysis, analyzer)
-            
+
+            # Store whitelist for query-focused rebuild
+            whitelist = set(analysis.explicitly_mentioned)
+            whitelist.update(analysis.inferred_concepts)
+            whitelist.update(expander.session_concepts_added)
+            whitelist.update(expander.query_bridge_concepts.keys())
+            st.session_state['last_query_analysis'] = analysis
+            st.session_state['last_query_text'] = query
+            st.session_state['last_query_whitelist'] = whitelist
+            st.session_state['last_query_dynamic_concepts'] = expander.session_concepts_added
+            st.session_state['last_query_bridge_concepts'] = expander.query_bridge_concepts
+
+            if st.session_state.get('query_focused_build'):
+                st.success(f"✅ Query analysis complete. Whitelist contains {len(whitelist)} concepts.")
+                if st.button("🔧 Rebuild Graph for This Query", type="primary", key="rebuild_for_query_btn"):
+                    st.session_state['force_rebuild'] = True
+                    st.rerun()
+
         with st.spinner("🕸️ Extracting priority-guided subgraph..."):
             full_graph = analysis_data["nx_graph"]
             extractor = PriorityGuidedSubgraphExtractor(full_graph, ontology, expander)
@@ -7614,14 +7677,21 @@ def main() -> None:
     )
     batch_trigger = st.session_state.pop("batch_trigger", None)
     batch_mode_on = st.session_state.get("batch_mode", False)
-    if batch_mode_on and (build_clicked or batch_trigger):
+    force_rebuild = st.session_state.pop("force_rebuild", False)
+
+    # Determine if we should run the pipeline
+    should_build = build_clicked or force_rebuild
+
+    if batch_mode_on and (should_build or batch_trigger):
+        if force_rebuild and st.session_state.get('query_focused_build'):
+            st.warning("Query-focused build is not yet supported in batch mode. Running standard batch analysis.")
         run_batch_analysis(
             df_filtered=df_filtered,
             selected_text_cols=selected_text_cols,
             ontology=ontology,
             run_mode=(batch_trigger or "all"),
         )
-    elif build_clicked:
+    elif should_build:
         progress_bar = st.progress(0.0)
         status = st.status(
             "Initializing advanced NLP analysis...", expanded=True,
@@ -7653,6 +7723,17 @@ def main() -> None:
                 config["COOCCURRENCE_WEIGHT"] = st.session_state.get('cooc_weight', 0.7)
                 config["SEMANTIC_WEIGHT"] = st.session_state.get('sem_weight', 0.2)
                 config["INFERENCE_WEIGHT"] = st.session_state.get('inf_weight', 0.1)
+
+                # Query-focused whitelist support
+                whitelist = build_query_whitelist(st.session_state)
+                if whitelist is not None:
+                    if len(whitelist) <= 15:
+                        config["MIN_CONCEPT_FREQ"] = 1
+                        st.info("Frequency threshold lowered to 1 for focused query.")
+                    else:
+                        config["MIN_CONCEPT_FREQ"] = 2
+                        st.info(f"Query-focused build: {len(whitelist)} concepts whitelisted. MIN_CONCEPT_FREQ set to {config['MIN_CONCEPT_FREQ']}.")
+
                 st.write(f"Adaptive config: {config}")
                 progress_bar.progress(0.15)
 
@@ -7677,12 +7758,12 @@ def main() -> None:
                 all_concepts: List[Optional[List[str]]] = [None] * len(df_filtered)
                 all_metrics: List[Optional[Dict]] = [None] * len(df_filtered)
 
-                def _process_single_row(idx, row):
+                def _process_single_row(idx, row, allowed_concepts=None):
                     text = " ".join([
                         str(row[col]) for col in selected_text_cols
                         if col in row and pd.notna(row[col])
                     ])
-                    concepts = extractor.extract_from_text(text, idx)
+                    concepts = extractor.extract_from_text(text, idx, allowed_concepts=allowed_concepts)
                     metrics: Dict[str, Any] = {}
                     current_matches = re.findall(
                         r'(\d+(?:\.\d+)?)\s*(?:ma/g|a/g|ma\s*g-1)', text, re.I
@@ -7713,7 +7794,7 @@ def main() -> None:
 
                 with ThreadPoolExecutor(max_workers=4) as executor:
                     futures = {
-                        executor.submit(_process_single_row, idx, row): idx
+                        executor.submit(_process_single_row, idx, row, whitelist): idx
                         for idx, row in df_filtered.iterrows()
                     }
                     completed = 0
