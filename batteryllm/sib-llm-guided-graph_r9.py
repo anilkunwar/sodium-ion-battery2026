@@ -5665,9 +5665,9 @@ def run_batch_analysis(
                 config["MIN_CONCEPT_FREQ"] = 1
                 st.info(f"Auto-lowered MIN_CONCEPT_FREQ to 1 for small whitelist")
         else:
-            st.warning("No query analysis available. Falling back to full graph.")
+            st.warning("No query analysis available. Falling back to full graph. Submit a query in the LLM panel first, then rebuild.")
             whitelist = None
-            st.session_state['query_focused_build'] = False
+            # Do NOT modify st.session_state['query_focused_build'] here — Streamlit prevents modifying widget-bound keys after widget instantiation
 
     use_ontology = st.session_state.get('use_ontology', True)
     embed_model = load_embedding_model()
@@ -7732,9 +7732,9 @@ def main() -> None:
                             config["MIN_CONCEPT_FREQ"] = 1
                             st.info(f"Auto-lowered MIN_CONCEPT_FREQ to 1 for small whitelist ({len(whitelist)} concepts)")
                     else:
-                        st.warning("No query analysis available. Falling back to full graph.")
+                        st.warning("No query analysis available. Falling back to full graph. Submit a query in the LLM panel first, then rebuild.")
                         whitelist = None
-                        st.session_state['query_focused_build'] = False
+                        # Do NOT modify st.session_state['query_focused_build'] here — Streamlit prevents modifying widget-bound keys after widget instantiation
 
                 st.write("Extracting concepts from abstracts (Parallel)...")
                 all_concepts: List[Optional[List[str]]] = [None] * len(df_filtered)
