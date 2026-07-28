@@ -6527,9 +6527,10 @@ def render_sidebar() -> None:
         gpu_info = "CUDA" if torch.cuda.is_available() else "CPU"
         st.caption(f"Device: {gpu_info}")
 
-        # LLM Query Panel
-        if st.session_state.get('analysis_data') and "ontology" in st.session_state.analysis_data:
-            render_llm_query_panel(st.session_state.analysis_data["ontology"], st.session_state.qa_expander, st.session_state.analysis_data["nx_graph"])
+        # LLM Query Panel — always available so query can be submitted BEFORE building
+        if 'ontology' in st.session_state:
+            full_graph = st.session_state.get('analysis_data', {}).get('nx_graph')
+            render_llm_query_panel(st.session_state.ontology, st.session_state.qa_expander, full_graph)
             render_mutation_controls(st.session_state.qa_expander)
             render_query_history()
 
@@ -7340,7 +7341,7 @@ class QuerySessionManager:
 # ============================================================================
 # 7. STREAMLIT UI INTEGRATORS
 # ============================================================================
-def render_llm_query_panel(ontology: Any, expander: DynamicOntologyExpander, full_graph: nx.Graph) -> Optional[QueryAnalysisResult]:
+def render_llm_query_panel(ontology: Any, expander: DynamicOntologyExpander, full_graph: Optional[nx.Graph] = None) -> Optional[QueryAnalysisResult]:
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 🔍 LLM-Guided Query")
     st.sidebar.caption("Ask a question to dynamically expand the ontology and focus the graph")
