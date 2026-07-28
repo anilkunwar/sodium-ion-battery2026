@@ -6529,7 +6529,7 @@ def render_sidebar() -> None:
 
         # LLM Query Panel — always available so query can be submitted BEFORE building
         if 'ontology' in st.session_state:
-            full_graph = st.session_state.get('analysis_data', {}).get('nx_graph')
+            full_graph = (st.session_state.get('analysis_data') or {}).get('nx_graph')
             render_llm_query_panel(st.session_state.ontology, st.session_state.qa_expander, full_graph)
             render_mutation_controls(st.session_state.qa_expander)
             render_query_history()
