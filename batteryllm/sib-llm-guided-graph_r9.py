@@ -7390,9 +7390,6 @@ def render_llm_query_panel(ontology: Any, expander: DynamicOntologyExpander, ful
 
     with st.sidebar.spinner("Analyzing query..."):
         analysis = analyzer.analyze_query(query, ontology)
-        # [QD-2] Store query analysis for query-focused graph building
-        st.session_state['last_query_analysis'] = analysis
-        st.session_state['last_query_text'] = query
     with st.sidebar.spinner("Expanding ontology..."):
         mutations = expander.apply_query_analysis(analysis, analyzer)
 
@@ -7484,9 +7481,9 @@ def render_llm_qa_tab(analysis_data: Dict, ontology: Any):
         
         with st.spinner("🧠 Analyzing query and expanding ontology..."):
             analysis = analyzer.analyze_query(query, ontology)
-        # [QD-2] Store query analysis for query-focused graph building
-        st.session_state['last_query_analysis'] = analysis
-        st.session_state['last_query_text'] = query
+            # [QD-2] Store query analysis for query-focused graph building
+            st.session_state['last_query_analysis'] = analysis
+            st.session_state['last_query_text'] = query
             mutations = expander.apply_query_analysis(analysis, analyzer)
             
         with st.spinner("🕸️ Extracting priority-guided subgraph..."):
