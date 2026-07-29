@@ -6709,11 +6709,15 @@ class ConceptPriority:
     is_explicitly_mentioned: bool
     is_inferred: bool
     inference_reason: str = ""
+    # NEW FIELDS
+    ppr_score: float = 0.0
+    qc_pmi: float = 0.0
+    semantic_resonance: float = 0.0
+    cde: float = 0.0
+    causal_proximity: float = 0.0
 
     def to_dict(self) -> Dict:
-        return {"concept": self.concept_name, "type": self.concept_type,
-                "score": round(self.composite_score, 3), "explicit": self.is_explicitly_mentioned,
-                "inferred": self.is_inferred, "reason": self.inference_reason}
+        return {**self.__dict__, "score": round(self.composite_score, 3)}
 
 @dataclass
 class QueryAnalysisResult:
@@ -7157,49 +7161,81 @@ class PriorityGuidedSubgraphExtractor:
         self.ontology = ontology
         self.expander = expander
 
-    def extract(self, analysis: QueryAnalysisResult) -> nx.Graph:
-        boosted = self.expander.get_priority_boosted_scores(analysis.concept_priorities)
-        concepts_above = analysis.get_concepts_above_threshold()
+    def extract(self, analysis: QueryAnalysisResult, query_embedding: np.ndarray = None) -> nx.Graph:
+        """
+        Extract a query-centric subgraph using:
+        - Personalized PageRank (topological centering)
+        - Query-Conditioned PMI (local co-occurrence)
+        - Semantic Resonance (contextual relevance)
+        """
+        # 1. Seed nodes from analysis
+        raw_seed_nodes = set(analysis.focus_nodes + analysis.get_concepts_above_threshold())
+        # Filter to nodes actually present in full_graph
+        seed_nodes = {n for n in raw_seed_nodes if n in self.full_graph}
+        if not seed_nodes:
+            # Fallback: use all nodes with priority_score > 0.3
+            seed_nodes = {n for n, d in self.full_graph.nodes(data=True)
+                          if d.get("priority_score", 0) >= 0.3}
 
-        # FIX: Filter seed nodes to only include those actually present in the full graph
-        # (LLM/Fallback might suggest concepts that were filtered out by MIN_CONCEPT_FREQ)
-        raw_seed_nodes = set(analysis.focus_nodes + concepts_above)
-        seed_nodes = set(n for n in raw_seed_nodes if n in self.full_graph)
+        # 2. Personalized PageRank (PPR)
+        personalization = {n: 1.0 if n in seed_nodes else 0.0 for n in self.full_graph.nodes()}
+        try:
+            ppr_scores = nx.pagerank(self.full_graph, personalization=personalization, alpha=0.85)
+        except Exception:
+            ppr_scores = {n: 1.0/len(self.full_graph) for n in self.full_graph.nodes()}
 
-        visited = set(seed_nodes)
-        frontier = deque(seed_nodes)
-        depth_map = {n: 0 for n in seed_nodes}
-        max_depth = analysis.subgraph_depth
+        # 3. Query-Conditioned Corpus (D_Q) – placeholder for future extension
+        qc_pmi = {}
 
-        while frontier:
-            current = frontier.popleft()
-            if depth_map[current] >= max_depth: continue
-            for neighbor in list(self.full_graph.neighbors(current)):
-                if neighbor in visited: continue
-                include = False
-                if neighbor in boosted and (boosted[neighbor].composite_score >= analysis.priority_threshold * 0.5 or depth_map[current] < max_depth - 1): include = True
-                elif neighbor in self.expander.session_concepts_added or neighbor in self.expander.query_bridge_concepts: include = True
-                elif depth_map[current] < max_depth - 1: include = True
-                
-                if include:
-                    visited.add(neighbor)
-                    depth_map[neighbor] = depth_map[current] + 1
-                    frontier.append(neighbor)
+        # 4. Combine scores: priority_score = 0.6*PPR + 0.4*SRS (if available)
+        for node in self.full_graph.nodes():
+            ppr = ppr_scores.get(node, 0.0)
+            srs = self._compute_semantic_resonance(node, query_embedding) if query_embedding is not None else 0.5
+            combined = 0.6 * ppr + 0.4 * srs
+            self.full_graph.nodes[node]["priority_score"] = combined
+            self.full_graph.nodes[node]["ppr_score"] = ppr
+            self.full_graph.nodes[node]["semantic_resonance"] = srs
 
-        subgraph = self.full_graph.subgraph(visited).copy()
-        for node in subgraph.nodes():
-            if node in boosted:
-                subgraph.nodes[node]["priority_score"] = boosted[node].composite_score
-                subgraph.nodes[node]["is_explicit"] = boosted[node].is_explicitly_mentioned
-                subgraph.nodes[node]["is_inferred"] = boosted[node].is_inferred
+            # Preserve explicit/inferred flags from analysis
+            if node in analysis.concept_priorities:
+                cp = analysis.concept_priorities[node]
+                self.full_graph.nodes[node]["is_explicit"] = cp.is_explicitly_mentioned
+                self.full_graph.nodes[node]["is_inferred"] = cp.is_inferred
             elif node in self.expander.session_concepts_added:
-                subgraph.nodes[node]["priority_score"] = 0.5
-                subgraph.nodes[node]["is_explicit"] = False
-                subgraph.nodes[node]["is_inferred"] = True
-                subgraph.nodes[node]["is_llm_added"] = True
+                self.full_graph.nodes[node]["is_explicit"] = False
+                self.full_graph.nodes[node]["is_inferred"] = True
+                self.full_graph.nodes[node]["is_llm_added"] = True
             else:
-                subgraph.nodes[node]["priority_score"] = 0.2
+                self.full_graph.nodes[node]["is_explicit"] = False
+                self.full_graph.nodes[node]["is_inferred"] = False
+
+        # 5. Subgraph extraction: keep nodes with priority_score > threshold (e.g., 0.1)
+        threshold = 0.1
+        selected_nodes = {n for n, d in self.full_graph.nodes(data=True)
+                          if d.get("priority_score", 0) >= threshold}
+        # Also include explicit seeds if they fell below threshold
+        selected_nodes.update(seed_nodes)
+
+        # Also include 1-hop neighbors of selected nodes if they have high degree
+        for node in list(selected_nodes):
+            for neighbor in self.full_graph.neighbors(node):
+                if self.full_graph.degree(neighbor) > 2:
+                    selected_nodes.add(neighbor)
+
+        subgraph = self.full_graph.subgraph(selected_nodes).copy()
         return subgraph
+
+    def _compute_semantic_resonance(self, concept: str, query_emb: np.ndarray) -> float:
+        """Simplified SRS: cosine similarity between query embedding and concept embedding."""
+        embed_model = st.session_state.get('embed_model')
+        if embed_model is None:
+            return 0.5
+        try:
+            concept_emb = embed_model.encode(concept, convert_to_numpy=True)
+            sim = np.dot(query_emb, concept_emb) / (np.linalg.norm(query_emb) * np.linalg.norm(concept_emb) + 1e-8)
+            return float(np.clip(sim, 0, 1))
+        except Exception:
+            return 0.5
 
 class QueryDrivenVisualizer:
     def __init__(self, ontology: Any):
@@ -7301,10 +7337,14 @@ class GraphRAGAnswerGenerator:
                 return "⚠️ LLM API Error: " + str(e) + chr(10) + chr(10) + fallback_text
         return self._generate_fallback_answer(query, analysis, top_nodes, evidence_snippets)
 
-    def _generate_fallback_answer(self, query: str, analysis: QueryAnalysisResult, top_nodes, snippets: List[str]) -> str:
+    def _generate_fallback_answer(self, query: str, analysis: Optional[QueryAnalysisResult], top_nodes, snippets: List[str]) -> str:
         nl = chr(10)
         fallback_text = "### Analysis of: '" + query + "'" + nl + nl
-        fallback_text += "**Core Problem Identified:** " + analysis.primary_problem.value.replace("_", " ").title() + nl + nl
+        if analysis is not None:
+            primary = getattr(analysis, 'primary_problem', None)
+            fallback_text += "**Core Problem Identified:** " + (primary.value.replace('_', ' ').title() if primary else 'Unknown') + nl + nl
+        else:
+            fallback_text += "**Core Problem Identified:** (analysis unavailable)" + nl + nl
         fallback_text += "**Key Concepts in Focus:**" + nl
         fallback_text += nl.join(["- **" + node + "** (" + attrs.get("concept_type", "general") + "): Priority Score " + str(round(attrs.get("priority_score", 0), 2)) for node, attrs in top_nodes])
         if snippets:
@@ -7312,7 +7352,11 @@ class GraphRAGAnswerGenerator:
         else:
             fallback_text += nl + "*Note: No direct text snippets were linked to these concepts in the current dataset.*" + nl
         fallback_text += nl + "**System Reasoning Chain:**" + nl
-        fallback_text += nl.join(["- " + step for step in analysis.reasoning_chain])
+        if analysis is not None:
+            reasoning_chain = getattr(analysis, 'reasoning_chain', [])
+            fallback_text += nl.join(["- " + step for step in reasoning_chain])
+        else:
+            fallback_text += "- No reasoning chain available (analysis was None)." + nl
         return fallback_text
 
 class QuerySessionManager:
@@ -7515,7 +7559,17 @@ def render_llm_qa_tab(analysis_data: Dict, ontology: Any):
         with st.spinner("🕸️ Extracting priority-guided subgraph..."):
             full_graph = analysis_data["nx_graph"]
             extractor = PriorityGuidedSubgraphExtractor(full_graph, ontology, expander)
-            subgraph = extractor.extract(analysis)
+            embed_model = analysis_data.get("embed_model")
+            if embed_model is not None:
+                st.session_state['embed_model'] = embed_model
+            query_embedding = None
+            if embed_model is not None:
+                try:
+                    with torch.no_grad():
+                        query_embedding = embed_model.encode(query, convert_to_numpy=True)
+                except Exception:
+                    pass
+            subgraph = extractor.extract(analysis, query_embedding)
             
         with st.spinner("📚 Retrieving evidence and generating answer..."):
             answer = generator.generate_ground_response(
