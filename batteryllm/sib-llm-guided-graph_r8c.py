@@ -1079,6 +1079,51 @@ _HIERARCHY_PARENTS: Dict[str, Tuple[str, int]] = {
 }
 
 
+
+
+def get_concept_group(canonical_name: str) -> str:
+    """
+    Extract the parent group for PyVis clustering/coloring.
+    Keeps nodes grouped by category WITHOUT making the label string long.
+    """
+    entry = _HIERARCHY_PARENTS.get(canonical_name)
+    if entry is not None and entry[0] is not None:
+        return entry[0]
+    return "General"
+
+
+def build_tooltip_html(
+    canonical_name: str,
+    concept_type: str,
+    degree: int,
+    freq: int,
+    definition: str,
+    theme: Dict,
+    node_font_face: str,
+) -> str:
+    """
+    Build a clean, non-truncated HTML tooltip for PyVis.
+    Puts the category in a sub-header instead of prefixing the main title.
+    """
+    group = get_concept_group(canonical_name)
+    html_parts = [
+        f"<div style='font-family:{node_font_face};max-width:480px;word-wrap:break-word;'>",
+        f"<div style='font-size:15px;font-weight:700;color:{theme['highlight_bg']};margin-bottom:6px;padding-bottom:4px;border-bottom:2px solid {theme['highlight_bg']};'>",
+        canonical_name.replace("_", " ").title(),
+        "</div>",
+        f"<div style='font-size:11px;color:#888;font-style:italic;margin-bottom:8px;'>{group}</div>",
+        f"<span style='color:{theme['tooltip_text']};opacity:0.7;'>Type:</span> {concept_type}<br>",
+        f"<span style='color:{theme['tooltip_text']};opacity:0.7;'>Degree:</span> {degree}<br>",
+        f"<span style='color:{theme['tooltip_text']};opacity:0.7;'>Frequency:</span> {freq}",
+    ]
+    if definition:
+        html_parts.append(
+            f"<br><span style='color:{theme['tooltip_text']};opacity:0.7;'>Definition:</span> <i>{definition}</i>"
+        )
+    html_parts.append("</div>")
+    return "".join(html_parts)
+
+
 def get_hierarchy_label(concept_key: str,
                         style: str = "arrow") -> str:
     """
@@ -3676,7 +3721,7 @@ def render_pyvis_graph(
         degree = int(nx_graph.degree(node))
         original_label = node
 
-        label = get_hierarchy_label(node, style="arrow") if node in _HIERARCHY_PARENTS else node
+        label = node.replace("_", " ").title()  # short name — hierarchy moved to group/tooltip
 
         if use_abbreviated_labels and len(original_label) > max_label_length:
             short_label = f"N{n_counter}"
@@ -3693,20 +3738,23 @@ def render_pyvis_graph(
         concept_type = nx_graph.nodes[node].get('concept_type', 'general')
         definition = nx_graph.nodes[node].get('definition', '')
 
-        tooltip_content = (
-            f"<div style='font-family:{node_font_face};'>"
-            f"<b style='font-size:14px;color:{theme['highlight_bg']};'>{node}</b><br>"
-            f"<span style='color:{theme['tooltip_text']};opacity:0.7;'>Type:</span> {concept_type}<br>"
-            f"<span style='color:{theme['tooltip_text']};opacity:0.7;'>Degree:</span> {degree}<br>"
-            f"<span style='color:{theme['tooltip_text']};opacity:0.7;'>Frequency:</span> {freq}"
+        tooltip_content = build_tooltip_html(
+            canonical_name=node,
+            concept_type=concept_type,
+            degree=degree,
+            freq=freq,
+            definition=definition if show_definitions else "",
+            theme=theme,
+            node_font_face=node_font_face,
         )
-        if show_definitions and definition:
-            tooltip_content += f"<br><span style='color:{theme['tooltip_text']};opacity:0.7;'>Definition:</span> <i>{definition}</i>"
         if use_abbreviated_labels and label != original_label:
-            tooltip_content += f"<br><span style='color:{theme['tooltip_text']};opacity:0.7;'>Full Label:</span> {original_label}"
-        tooltip_content += "</div>"
+            tooltip_content = tooltip_content.replace(
+                "</div>",
+                f"<br><span style='color:{theme['tooltip_text']};opacity:0.7;'>Full Label:</span> {original_label}</div>"
+            )
 
-        net.add_node(node, label=label, size=size, 
+        net.add_node(node, label=label, size=size,
+                     group=get_concept_group(node),
                      color={'background': color, 'border': theme['node_border'],
                             'highlight': {'background': theme['highlight_bg'], 'border': '#ffffff'},
                             'hover': {'background': theme['hover_bg'], 'border': '#ffffff'}},
@@ -3799,11 +3847,10 @@ def render_pyvis_graph(
     /* ═══════════════════════════════════════════════════════════════
        ULTIMATE FIX: Aggressive wildcard override for vis.js tooltip
        truncation. vis.js renders title HTML directly inside
-       div.vis-tooltip with NO wrapper classes. The _HIERARCHY_PARENTS
-       builder creates compound labels like
-       "Electrochemical Properties → Coulombic Efficiency" which
-       vis.js truncates by default. This fix forces wrap on ALL
-       nested elements unconditionally.
+       div.vis-tooltip with NO wrapper classes. Long hierarchy labels
+       like "Electrochemical Properties → Coulombic Efficiency" get
+       truncated by default. This fix forces wrap on ALL nested
+       elements unconditionally.
        ═══════════════════════════════════════════════════════════════ */
     div.vis-tooltip,
     div.vis-tooltip *,
