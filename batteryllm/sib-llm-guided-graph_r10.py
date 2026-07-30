@@ -4026,9 +4026,9 @@ if 'div.vis-tooltip' not in html_content:
         html_content = html_content.replace('</body>', highlight_js + '</body>')
 
     # Layer 4: Iframe height — 950px gives ~160px buffer for bottom-edge tooltips
-# Layer 5: Edge info panel z-index — must stay BELOW tooltip z-index (10000)
-# The edge panel is already fixed at z-index:9999 in the highlight_js; tooltip CSS sets z-index:10000.
-st.components.v1.html(html_content, height=950, scrolling=True)
+    # Layer 5: Edge info panel z-index — must stay BELOW tooltip z-index (10000)
+    # The edge panel is already fixed at z-index:9999 in the highlight_js; tooltip CSS sets z-index:10000.
+    st.components.v1.html(html_content, height=950, scrolling=True)
 
     if use_abbreviated_labels and label_map:
         st.markdown("---")
