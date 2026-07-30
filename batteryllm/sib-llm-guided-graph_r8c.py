@@ -1092,30 +1092,19 @@ def get_concept_group(canonical_name: str) -> str:
     return "General"
 
 
-def build_safe_tooltip(
-    canonical_name: str,
-    concept_type: str,
-    degree: int,
-    freq: int,
-    definition: str,
-) -> str:
+def safe_tooltip(title: str, body: str) -> str:
     """
-    Creates a bulletproof PyVis tooltip.
-    - Uses html.escape() to prevent special chars from breaking the tooltip.
-    - Avoids wrapper <div>s and restrictive CSS that conflict with vis.js.
-    - Uses ONLY simple <b> and <br> tags which PyVis natively supports.
+    Creates a safe PyVis tooltip without any external imports.
+    Manually escapes only the 3 characters that break vis.js HTML parsing.
+    Uses ONLY simple <b> and <br> tags which PyVis natively supports.
     """
-    import html as html_module
-    safe_name = html_module.escape(canonical_name.replace("_", " ").title())
-    safe_type = html_module.escape(concept_type)
-    safe_def = html_module.escape(definition) if definition else "No definition available."
-    return (
-        f"<b>{safe_name}</b>"
-        f"<br>Type: {safe_type}"
-        f"<br>Degree: {degree}"
-        f"<br>Freq: {freq}"
-        f"<br><br>{safe_def}"
-    )
+    if not body:
+        body = "No definition available."
+    # Manually escape ONLY the 3 characters that break vis.js HTML parsing
+    title = title.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    body = body.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    # Keep it extremely simple: bold title, line break, definition
+    return f"<b>{title}</b><br>{body}"
 
 
 def get_hierarchy_label(concept_key: str,
@@ -3732,12 +3721,9 @@ def render_pyvis_graph(
         concept_type = nx_graph.nodes[node].get('concept_type', 'general')
         definition = nx_graph.nodes[node].get('definition', '')
 
-        tooltip_content = build_safe_tooltip(
-            canonical_name=node,
-            concept_type=concept_type,
-            degree=degree,
-            freq=freq,
-            definition=definition if show_definitions else "",
+        tooltip_content = safe_tooltip(
+            title=node.replace("_", " ").title(),
+            body=definition if show_definitions else "",
         )
         if use_abbreviated_labels and label != original_label:
             tooltip_content += f"<br><br>Full Label: {original_label}"
