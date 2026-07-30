@@ -6291,7 +6291,7 @@ def render_sidebar() -> None:
                 index=0,
             )
             st.slider(
-                "Node legend font size", 8, 20, 13, step=1,
+                "Node legend font size", 8, 50, 25, step=1,
                 help="Font size for the abbreviated node legend below the graph.",
                 key="node_legend_font_size",
             )
