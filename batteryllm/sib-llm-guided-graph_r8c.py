@@ -1092,19 +1092,36 @@ def get_concept_group(canonical_name: str) -> str:
     return "General"
 
 
-def safe_tooltip(title: str, body: str) -> str:
+def build_tooltip_html(
+    canonical_name: str,
+    concept_type: str,
+    degree: int,
+    freq: int,
+    definition: str,
+    theme: Dict,
+    node_font_face: str,
+) -> str:
     """
-    Creates a safe PyVis tooltip without any external imports.
-    Manually escapes only the 3 characters that break vis.js HTML parsing.
-    Uses ONLY simple <b> and <br> tags which PyVis natively supports.
+    Build a clean, non-truncated HTML tooltip for PyVis.
+    Puts the category in a sub-header instead of prefixing the main title.
     """
-    if not body:
-        body = "No definition available."
-    # Manually escape ONLY the 3 characters that break vis.js HTML parsing
-    title = title.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    body = body.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    # Keep it extremely simple: bold title, line break, definition
-    return f"<b>{title}</b><br>{body}"
+    group = get_concept_group(canonical_name)
+    html_parts = [
+        f"<div style='font-family:{node_font_face};max-width:480px;word-wrap:break-word;'>",
+        f"<div style='font-size:15px;font-weight:700;color:{theme['highlight_bg']};margin-bottom:6px;padding-bottom:4px;border-bottom:2px solid {theme['highlight_bg']};'>",
+        canonical_name.replace("_", " ").title(),
+        "</div>",
+        f"<div style='font-size:11px;color:#888;font-style:italic;margin-bottom:8px;'>{group}</div>",
+        f"<span style='color:{theme['tooltip_text']};opacity:0.7;'>Type:</span> {concept_type}<br>",
+        f"<span style='color:{theme['tooltip_text']};opacity:0.7;'>Degree:</span> {degree}<br>",
+        f"<span style='color:{theme['tooltip_text']};opacity:0.7;'>Frequency:</span> {freq}",
+    ]
+    if definition:
+        html_parts.append(
+            f"<br><span style='color:{theme['tooltip_text']};opacity:0.7;'>Definition:</span> <i>{definition}</i>"
+        )
+    html_parts.append("</div>")
+    return "".join(html_parts)
 
 
 def get_hierarchy_label(concept_key: str,
@@ -3721,12 +3738,20 @@ def render_pyvis_graph(
         concept_type = nx_graph.nodes[node].get('concept_type', 'general')
         definition = nx_graph.nodes[node].get('definition', '')
 
-        tooltip_content = safe_tooltip(
-            title=node.replace("_", " ").title(),
-            body=definition if show_definitions else "",
+        tooltip_content = build_tooltip_html(
+            canonical_name=node,
+            concept_type=concept_type,
+            degree=degree,
+            freq=freq,
+            definition=definition if show_definitions else "",
+            theme=theme,
+            node_font_face=node_font_face,
         )
         if use_abbreviated_labels and label != original_label:
-            tooltip_content += f"<br><br>Full Label: {original_label}"
+            tooltip_content = tooltip_content.replace(
+                "</div>",
+                f"<br><span style='color:{theme['tooltip_text']};opacity:0.7;'>Full Label:</span> {original_label}</div>"
+            )
 
         net.add_node(node, label=label, size=size,
                      group=get_concept_group(node),
@@ -3825,8 +3850,7 @@ def render_pyvis_graph(
        div.vis-tooltip with NO wrapper classes. Long hierarchy labels
        like "Electrochemical Properties → Coulombic Efficiency" get
        truncated by default. This fix forces wrap on ALL nested
-       elements unconditionally. NO wrapper <div>s in tooltip HTML —
-       only <b> and <br> to avoid vis.js layout conflicts.
+       elements unconditionally.
        ═══════════════════════════════════════════════════════════════ */
     div.vis-tooltip,
     div.vis-tooltip *,
@@ -3864,7 +3888,18 @@ def render_pyvis_graph(
         border: 1px solid {theme['tooltip_border']} !important;
     }}
 
+    /* First child = concept title (from title HTML) */
+    div.vis-tooltip > div:first-child {{
+        font-size: 15px !important;
+        font-weight: 700 !important;
+        margin-bottom: 8px !important;
+        padding-bottom: 5px !important;
+        border-bottom: 2px solid {theme['highlight_bg']} !important;
+        color: {theme['highlight_bg']} !important;
+    }}
+
     .hea-legend {{ font-size: {node_legend_font_size}px !important; }}
+    </style>
     """
     html_content = html_content.replace('</head>', custom_css + '</head>')
 
