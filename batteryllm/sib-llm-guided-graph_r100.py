@@ -6270,7 +6270,7 @@ def render_sidebar() -> None:
         )
         with st.expander("Node & Label Settings"):
             st.session_state['node_label_size'] = st.slider(
-                "Node label font size", 8, 24, 12, step=1,
+                "Node label font size", 8, 50, 25, step=1,
                 help="Font size for node labels in the graph",
             )
             st.session_state['node_label_position'] = st.selectbox(
