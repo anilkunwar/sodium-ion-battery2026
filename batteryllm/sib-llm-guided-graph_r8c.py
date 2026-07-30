@@ -3797,7 +3797,13 @@ def render_pyvis_graph(
     #mynetwork {{ border-radius: 16px; box-shadow: 0 12px 48px {theme['shadow_color']}; outline: none; }}
 
     /* ═══════════════════════════════════════════════════════════════
-       终极修复：无差别覆盖 vis.js tooltip 所有内部元素的截断样式
+       ULTIMATE FIX: Aggressive wildcard override for vis.js tooltip
+       truncation. vis.js renders title HTML directly inside
+       div.vis-tooltip with NO wrapper classes. The _HIERARCHY_PARENTS
+       builder creates compound labels like
+       "Electrochemical Properties → Coulombic Efficiency" which
+       vis.js truncates by default. This fix forces wrap on ALL
+       nested elements unconditionally.
        ═══════════════════════════════════════════════════════════════ */
     div.vis-tooltip,
     div.vis-tooltip *,
@@ -3805,7 +3811,13 @@ def render_pyvis_graph(
     div.vis-tooltip div,
     div.vis-tooltip span,
     div.vis-tooltip b,
-    div.vis-tooltip i {{
+    div.vis-tooltip i,
+    div.vis-tooltip strong,
+    div.vis-tooltip em,
+    div.vis-tooltip small,
+    div.vis-tooltip table,
+    div.vis-tooltip td,
+    div.vis-tooltip tr {{
         max-width: 600px !important;
         width: auto !important;
         white-space: normal !important;
@@ -3817,7 +3829,19 @@ def render_pyvis_graph(
         line-height: 1.5 !important;
     }}
 
-    /* 特别优化：让 tooltip 标题（第一个子元素）更清晰 */
+    /* Tooltip container sizing */
+    div.vis-tooltip {{
+        padding: 14px 18px !important;
+        border-radius: 10px !important;
+        box-shadow: 0 8px 32px {theme['shadow_color']} !important;
+        font-family: '{node_font_face}', sans-serif !important;
+        font-size: {tooltip_font_size}px !important;
+        background: {theme['tooltip_bg']} !important;
+        color: {theme['tooltip_text']} !important;
+        border: 1px solid {theme['tooltip_border']} !important;
+    }}
+
+    /* First child = concept title (from title HTML) */
     div.vis-tooltip > div:first-child {{
         font-size: 15px !important;
         font-weight: 700 !important;
@@ -3827,7 +3851,6 @@ def render_pyvis_graph(
         color: {theme['highlight_bg']} !important;
     }}
 
-    /* ── 原有样式保留 ── */
     .hea-legend {{ font-size: {node_legend_font_size}px !important; }}
     </style>
     """
