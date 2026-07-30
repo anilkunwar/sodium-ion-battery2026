@@ -3796,41 +3796,38 @@ def render_pyvis_graph(
     body {{ background: {theme['bg']}; margin: 0; padding: 0; font-family: '{node_font_face}', sans-serif; }}
     #mynetwork {{ border-radius: 16px; box-shadow: 0 12px 48px {theme['shadow_color']}; outline: none; }}
 
-    /* ── OUTER TOOLTIP ── */
-    div.vis-tooltip {{
-        background: {theme['tooltip_bg']} !important;
-        color: {theme['tooltip_text']} !important;
-        border: 1px solid {theme['tooltip_border']} !important;
-        border-radius: 10px !important;
-        padding: 14px 18px !important;
-        font-family: '{node_font_face}', sans-serif !important;
-        font-size: {tooltip_font_size}px !important;
-        line-height: 1.5 !important;
-        box-shadow: 0 8px 32px {theme['shadow_color']} !important;
-        max-width: 520px !important;
+    /* ═══════════════════════════════════════════════════════════════
+       终极修复：无差别覆盖 vis.js tooltip 所有内部元素的截断样式
+       ═══════════════════════════════════════════════════════════════ */
+    div.vis-tooltip,
+    div.vis-tooltip *,
+    div.vis-tooltip > div,
+    div.vis-tooltip div,
+    div.vis-tooltip span,
+    div.vis-tooltip b,
+    div.vis-tooltip i {{
+        max-width: 600px !important;
         width: auto !important;
         white-space: normal !important;
-    }}
-
-    /* ── FIX: HEADER TRUNCATION ── */
-    div.vis-tooltip > div:first-child,
-    div.vis-tooltip div.vis-tooltip-header {{
-        white-space: normal !important;
-        overflow: visible !important;
+        word-wrap: break-word !important;
+        overflow-wrap: break-word !important;
         text-overflow: unset !important;
-        word-wrap: break-word !important;
-        overflow-wrap: break-word !important;
-        word-break: break-word !important;
-        max-width: 500px !important;
+        overflow: visible !important;
+        hyphens: auto !important;
+        line-height: 1.5 !important;
     }}
 
-    /* ── TOOLTIP BODY CONTENT ── */
-    div.vis-tooltip div.vis-tooltip-content {{
-        white-space: normal !important;
-        word-wrap: break-word !important;
-        overflow-wrap: break-word !important;
+    /* 特别优化：让 tooltip 标题（第一个子元素）更清晰 */
+    div.vis-tooltip > div:first-child {{
+        font-size: 15px !important;
+        font-weight: 700 !important;
+        margin-bottom: 8px !important;
+        padding-bottom: 5px !important;
+        border-bottom: 2px solid {theme['highlight_bg']} !important;
+        color: {theme['highlight_bg']} !important;
     }}
 
+    /* ── 原有样式保留 ── */
     .hea-legend {{ font-size: {node_legend_font_size}px !important; }}
     </style>
     """
