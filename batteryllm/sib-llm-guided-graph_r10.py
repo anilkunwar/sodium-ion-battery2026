@@ -3864,20 +3864,20 @@ div.vis-tooltip i {{
 </style>
 """
     # Layer 3: Robust CSS injection — verify success, fallback to prepend-before-body
-if '</head>' in html_content:
-    html_content = html_content.replace('</head>', custom_css + '</head>')
-elif '<head>' in html_content:
-    # Insert before closing head tag with possible whitespace/variant
-    html_content = re.sub(r'</head\s*>', custom_css + r'\g<0>', html_content, flags=re.I)
-else:
-    # Ultimate fallback: prepend right after <body> or at start
-    if '<body>' in html_content:
-        html_content = html_content.replace('<body>', '<body>' + custom_css)
+    if '</head>' in html_content:
+        html_content = html_content.replace('</head>', custom_css + '</head>')
+    elif '<head>' in html_content:
+        # Insert before closing head tag with possible whitespace/variant
+        html_content = re.sub(r'</head\s*>', custom_css + r'\g<0>', html_content, flags=re.I)
     else:
-        html_content = custom_css + html_content
-# Verify injection succeeded
-if 'div.vis-tooltip' not in html_content:
-    st.warning("Tooltip CSS injection failed — tooltips may render with default (clipped) styling.")
+        # Ultimate fallback: prepend right after <body> or at start
+        if '<body>' in html_content:
+            html_content = html_content.replace('<body>', '<body>' + custom_css)
+        else:
+            html_content = custom_css + html_content
+    # Verify injection succeeded
+    if 'div.vis-tooltip' not in html_content:
+        st.warning("Tooltip CSS injection failed — tooltips may render with default (clipped) styling.")
 
     if enable_node_highlight:
         highlight_js = r"""
