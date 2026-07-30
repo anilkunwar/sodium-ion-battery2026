@@ -3685,7 +3685,7 @@ def render_pyvis_graph(
             label = short_label
 
         node_shape = 'circle'
-        inside_font_size = max(8, min(int(size * 0.55), 14))
+        inside_font_size = max(8, min(int(node_label_size), 14))
         font_dict = {'color': '#ffffff', 'size': inside_font_size, 'face': node_font_face, 'bold': True}
         
         concept_type = nx_graph.nodes[node].get('concept_type', 'general')
@@ -3998,6 +3998,19 @@ def render_pyvis_graph(
         html_content = html_content.replace('</body>', highlight_js + '</body>')
 
     st.components.v1.html(html_content, height=950, scrolling=True)
+
+    try:
+        html_bytes = html_content.encode('utf-8')
+        st.download_button(
+            "📥 Download Interactive Graph (HTML)",
+            data=html_bytes,
+            file_name="sib_concept_graph.html",
+            mime="text/html"
+        )
+        del html_content, html_bytes
+        gc.collect()
+    except Exception as e:
+        st.error(f"Download preparation failed: {e}")
 
     if use_abbreviated_labels and label_map:
         st.markdown("---")
