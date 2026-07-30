@@ -3626,7 +3626,6 @@ def render_pyvis_graph(
     edge_label_position="middle",
     use_abbreviated_labels=False, max_label_length=15,
     enable_node_highlight=True, show_definitions=True, ontology=None,
-    # NEW parameters for formatting
     edge_lightness=0.6, edge_color_mode="theme",
     custom_edge_color="#AAAAAA", tooltip_font_size=13,
     node_legend_font_size=13
@@ -3642,6 +3641,7 @@ def render_pyvis_graph(
         nx_graph = nx_graph.subgraph(top_nodes).copy()
 
     cmap_colors = get_colormap_colors(cmap_name, max(1, len(nx_graph.nodes())))
+    
     net = Network(height="780px", width="100%", bgcolor=theme['bg'], font_color=theme['font'],
                   select_menu=True, notebook=False, cdn_resources='remote')
 
@@ -3674,51 +3674,43 @@ def render_pyvis_graph(
         size = int(np.clip(8 + freq * 1.2, 8, 40))
         color = get_sib_category_color(node, cmap_colors)
         degree = int(nx_graph.degree(node))
+        
         original_label = node
-
-        # Use hierarchy label for display if available, otherwise clean node name
-        if node in _HIERARCHY_PARENTS:
-            label = get_hierarchy_label(node, style="arrow")
-        else:
-            label = node.replace('_', ' ').title()
-
+        label = get_hierarchy_label(node, style="arrow") if node in _HIERARCHY_PARENTS else node
+        
         if use_abbreviated_labels and len(original_label) > max_label_length:
             short_label = f"N{n_counter}"
             label_map[short_label] = original_label
             n_counter += 1
             label = short_label
-            node_shape = 'circle'
-            inside_font_size = max(8, min(int(size * 0.55), 14))
-            font_dict = {'color': '#ffffff', 'size': inside_font_size, 'face': node_font_face, 'bold': True}
-        else:
-            node_shape = 'dot'
-            # Ensure font size is large enough to read but not so large it forces truncation
-            display_font_size = max(10, min(int(node_label_size), 14))
-            font_dict = {'color': theme['font'], 'size': display_font_size, 'face': node_font_face, 'strokeWidth': 0, 'vadjust': -6}
 
+        node_shape = 'circle'
+        inside_font_size = max(8, min(int(size * 0.55), 14))
+        font_dict = {'color': '#ffffff', 'size': inside_font_size, 'face': node_font_face, 'bold': True}
+        
         concept_type = nx_graph.nodes[node].get('concept_type', 'general')
         definition = nx_graph.nodes[node].get('definition', '')
-
-        # Layer 1: Content capping — prevent unbounded tooltip growth
+        
         _def_display = ""
         if show_definitions and definition:
             _def_display = definition[:180] + "..." if len(definition) > 180 else definition
+            
         _full_label_display = ""
         if use_abbreviated_labels and label != original_label:
             _full_label_display = original_label
 
+        # FIX 1: Ensure the tooltip ALWAYS starts with the exact canonical node name on its own line
+        # This prevents vis.js from merging it with other text and causing parsing issues
         tooltip_content = (
-            f"<div style='font-family:{node_font_face};max-width:520px;max-height:260px;overflow:auto;'>"
-            f"<b style='font-size:14px;color:{theme['highlight_bg']};'>{node}</b><br>"
-            f"<span style='color:{theme['tooltip_text']};opacity:0.7;'>Type:</span> {concept_type}<br>"
-            f"<span style='color:{theme['tooltip_text']};opacity:0.7;'>Degree:</span> {degree}<br>"
-            f"<span style='color:{theme['tooltip_text']};opacity:0.7;'>Frequency:</span> {freq}"
-            + (f"<br><span style='color:{theme['tooltip_text']};opacity:0.7;'>Definition:</span> <i>{_def_display}</i>" if _def_display else "")
-            + (f"<br><span style='color:{theme['tooltip_text']};opacity:0.7;'>Full Label:</span> {_full_label_display}" if _full_label_display else "")
-            + "</div>"
+            f"{node}\n"
+            f"Type: {concept_type}\n"
+            f"Degree: {degree}\n"
+            f"Frequency: {freq}"
+            + (f"\nDefinition: {_def_display}" if _def_display else "")
+            + (f"\nFull Label: {_full_label_display}" if _full_label_display else "")
         )
 
-        net.add_node(node, label=label, size=size, 
+        net.add_node(node, label=label, size=size,
                      color={'background': color, 'border': theme['node_border'],
                             'highlight': {'background': theme['highlight_bg'], 'border': '#ffffff'},
                             'hover': {'background': theme['hover_bg'], 'border': '#ffffff'}},
@@ -3733,13 +3725,11 @@ def render_pyvis_graph(
         w = float(nx_graph[u][v].get('weight', 1))
         edge_type = nx_graph[u][v].get('edge_type', 'unknown')
         is_inferred = nx_graph[u][v].get('inferred', False)
-
         rel_type = RelationshipType.SEMANTIC
         if edge_type != 'unknown':
             try: rel_type = RelationshipType(edge_type)
             except ValueError: pass
 
-        # NEW: Edge color logic
         if edge_color_mode == "theme":
             base_color = theme['edge_unknown'] if edge_type == 'unknown' else get_edge_color(rel_type)
             if edge_lightness > 0:
@@ -3757,17 +3747,15 @@ def render_pyvis_graph(
             value=float(np.clip(w, 0.5, 5)), width=width,
             color={'color': base_color, 'highlight': theme['highlight_bg'], 'hover': theme['hover_bg'], 'opacity': 0.85},
             smooth={"type": "dynamic"},
-            title=f"<span style='font-family:{node_font_face};display:block;max-width:400px;'>Weight: <b>{w:.2f}</b><br>Type: {edge_type}<br>Inferred: {is_inferred}</span>",
+            title=f"Weight: {w:.2f}\nType: {edge_type}\nInferred: {is_inferred}",
             dashes=dashes
         )
-
         if edge_label_mode == "all" or (edge_label_mode == "threshold" and w >= weight_threshold):
             edge_kwargs['label'] = f"{w:.1f}"
             edge_kwargs['font'] = {'color': edge_label_color or theme['font'], 'size': int(edge_label_size),
                                    'background': theme['tooltip_bg'], 'strokeWidth': 2, 'strokeColor': theme['node_border'],
                                    'align': edge_label_position, 'face': node_font_face}
         net.add_edge(u, v, **edge_kwargs)
-
         if rel_type not in used_rel_types:
             used_rel_types[rel_type] = rel_type.value.replace("_", " ").title()
 
@@ -3803,102 +3791,62 @@ def render_pyvis_graph(
         st.error(f"PyVis HTML generation failed: {e}")
         html_content = net.generate_html()
 
+    # FIX 2: Enhanced CSS to prevent any text truncation in tooltips or panels
     custom_css = f"""
-<style>
-body {{ background: {theme['bg']}; margin: 0; padding: 0; font-family: '{node_font_face}', sans-serif; }}
-#mynetwork {{ border-radius: 16px; box-shadow: 0 12px 48px {theme['shadow_color']}; outline: none; }}
+    <style>
+    body {{ background: {theme['bg']}; margin: 0; padding: 0; font-family: '{node_font_face}', sans-serif; }}
+    #mynetwork {{ border-radius: 16px; box-shadow: 0 12px 48px {theme['shadow_color']}; outline: none; }}
+    
+    div.vis-tooltip {{
+        max-width: 540px !important;
+        width: auto !important;
+        max-height: 280px !important;
+        height: auto !important;
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+        z-index: 10000 !important;
+        white-space: pre-wrap !important; /* Preserves newlines from our tooltip format */
+        word-wrap: break-word !important;
+        overflow-wrap: break-word !important;
+        line-height: 1.45 !important;
+        padding: 10px 14px !important;
+        border-radius: 8px !important;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.25) !important;
+    }}
+    div.vis-tooltip > div {{
+        max-width: 520px !important;
+        width: auto !important;
+        max-height: 260px !important;
+        overflow: auto !important;
+        white-space: pre-wrap !important;
+    }}
+    .hea-legend {{ font-size: {node_legend_font_size}px !important; }}
+    
+    /* FIX 3: Explicitly prevent truncation in the edge info panel header */
+    #edge-info-panel > div:first-child > div:first-child {{
+        white-space: normal !important;
+        overflow: visible !important;
+        text-overflow: clip !important;
+        word-break: break-word !important;
+    }}
+    </style>
+    """
 
-/* ===== LAYER 2: Vis.js tooltip override =====
-   Targets: (a) the tooltip container itself, (b) its direct content wrapper.
-   Does NOT use '*'' to avoid corrupting inline elements.
-   max-height is SET (not removed) to keep tooltips within iframe bounds.
-   overflow-y: auto enables scrolling for the rare overflow case.
-   z-index ensures tooltips sit above the edge-info-panel (z=9999).
-*/
-div.vis-tooltip {{
-    max-width: 540px !important;
-    width: auto !important;
-    max-height: 280px !important;
-    height: auto !important;
-    overflow-y: auto !important;
-    overflow-x: hidden !important;
-    z-index: 10000 !important;
-    white-space: normal !important;
-    word-wrap: break-word !important;
-    overflow-wrap: break-word !important;
-    line-height: 1.45 !important;
-    padding: 10px 14px !important;
-    border-radius: 8px !important;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.25) !important;
-}}
-
-/* The direct child wrapper created by PyVis/our HTML */
-div.vis-tooltip > div {{
-    max-width: 520px !important;
-    width: auto !important;
-    max-height: 260px !important;
-    overflow: auto !important;
-}}
-
-/* Title <b> element — targeted directly, not via :first-child on wrapper */
-div.vis-tooltip b {{
-    font-size: 14px !important;
-    font-weight: 700 !important;
-    display: inline-block !important;
-    margin-bottom: 4px !important;
-    border-bottom: 2px solid {theme['highlight_bg']} !important;
-    padding-bottom: 2px !important;
-    color: {theme['highlight_bg']} !important;
-}}
-
-/* Metadata labels (Type, Degree, etc.) */
-div.vis-tooltip span {{
-    font-size: 12px !important;
-    line-height: 1.4 !important;
-}}
-
-/* Definition italic block */
-div.vis-tooltip i {{
-    font-size: 11px !important;
-    color: #555 !important;
-    line-height: 1.35 !important;
-    display: inline-block !important;
-    max-width: 500px !important;
-}}
-
-/* ===== NODE LABEL ANTI-TRUNCATION FIX =====
-   Vis.js defaults clip labels at ~node width. These rules ensure
-   full concept names (e.g., "sei_formation", "volume_expansion") render.
-*/
-div.vis-network div.vis-node div.vis-label {{
-    max-width: none !important;
-    width: auto !important;
-    white-space: nowrap !important;
-    overflow: visible !important;
-    text-overflow: clip !important;
-    display: inline-block !important;
-}}
-
-.hea-legend {{ font-size: {node_legend_font_size}px !important; }}
-</style>
-"""
-    # Layer 3: Robust CSS injection — verify success, fallback to prepend-before-body
     if '</head>' in html_content:
         html_content = html_content.replace('</head>', custom_css + '</head>')
     elif '<head>' in html_content:
-        # Insert before closing head tag with possible whitespace/variant
         html_content = re.sub(r'</head\s*>', custom_css + r'\g<0>', html_content, flags=re.I)
     else:
-        # Ultimate fallback: prepend right after <body> or at start
         if '<body>' in html_content:
             html_content = html_content.replace('<body>', '<body>' + custom_css)
         else:
             html_content = custom_css + html_content
-    # Verify injection succeeded
+
     if 'div.vis-tooltip' not in html_content:
         st.warning("Tooltip CSS injection failed — tooltips may render with default (clipped) styling.")
 
     if enable_node_highlight:
+        # FIX 4: Robust JS that uses nodeId directly instead of parsing truncated tooltips
         highlight_js = r"""
         <script>
         (function() {
@@ -3911,10 +3859,12 @@ div.vis-network div.vis-node div.vis-label {{
                     var activeNodeId = null;
                     var labelMode = 'short';
                     var labelMap = {};
+                    
                     (function initLabelMap() {
                         var hidden = document.getElementById('hea-label-map-data');
                         if (hidden && hidden.textContent) { try { labelMap = JSON.parse(hidden.textContent); } catch(e) {} }
                     })();
+
                     function resetAll() {
                         var nodeRestores = [];
                         for (var nid in savedNodeColors) { nodeRestores.push({id: nid, color: savedNodeColors[nid]}); }
@@ -3922,17 +3872,12 @@ div.vis-network div.vis-node div.vis-label {{
                         savedNodeColors = {}; activeNodeId = null;
                         var panel = document.getElementById('edge-info-panel'); if (panel) panel.style.display = 'none';
                     }
+
                     function resolveFullName(shortOrId) {
                         if (labelMap && labelMap[shortOrId]) return labelMap[shortOrId];
-                        var n = nodesDS.get(shortOrId);
-                        if (n && n.title) {
-                            var tmp = document.createElement('div'); tmp.innerHTML = n.title;
-                            var txt = (tmp.textContent || tmp.innerText || '').trim();
-                            var firstLine = txt.split('\\n')[0];
-                            if (firstLine) return firstLine.replace(/<[^>]*>/g,'').trim();
-                        }
                         return shortOrId;
                     }
+
                     function formatEdgeRow(e, idx, mode) {
                         var typeColor = e.inferred ? '#8b5cf6' : '#0ea5e9';
                         var badge = e.inferred ? ' <span style="background:#8b5cf6;color:white;padding:1px 4px;border-radius:3px;font-size:9px;">INFERRED</span>' : '';
@@ -3940,49 +3885,57 @@ div.vis-network div.vis-node div.vis-label {{
                         var fromName = (mode === 'short') ? e.from : resolveFullName(e.from);
                         var toName = (mode === 'short') ? e.to : resolveFullName(e.to);
                         return '<div style="padding:8px 10px;margin:4px 0;background:rgba(248,250,252,0.9);border-left:4px solid ' + typeColor + ';border-radius:6px;font-size:12px;">' +
-                        '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">' +
-                        '<span style="font-family:monospace;font-size:11px;color:#1e293b;font-weight:600;">' + fromName + '</span>' +
-                        '<span style="color:#94a3b8;font-size:13px;">↔</span>' +
-                        '<span style="font-family:monospace;font-size:11px;color:#1e293b;font-weight:600;">' + toName + '</span></div>' +
-                        '<div style="display:flex;align-items:center;gap:8px;padding-left:10px;">' +
-                        '<span style="background:#0ea5e9;color:white;font-size:10px;padding:2px 6px;border-radius:4px;font-weight:700;">W: ' + e.weight + '</span>' +
-                        typeBadge + badge + '</div></div>';
+                            '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;flex-wrap:wrap;">' +
+                            '<span style="font-family:monospace;font-size:11px;color:#1e293b;font-weight:600;word-break:break-word;">' + fromName + '</span>' +
+                            '<span style="color:#94a3b8;font-size:13px;">↔</span>' +
+                            '<span style="font-family:monospace;font-size:11px;color:#1e293b;font-weight:600;word-break:break-word;">' + toName + '</span></div>' +
+                            '<div style="display:flex;align-items:center;gap:8px;padding-left:10px;">' +
+                            '<span style="background:#0ea5e9;color:white;font-size:10px;padding:2px 6px;border-radius:4px;font-weight:700;">W: ' + e.weight + '</span>' +
+                            typeBadge + badge + '</div></div>';
                     }
+
                     function showEdgeInfoPanel(nodeId, connectedEdges) {
                         var panel = document.getElementById('edge-info-panel');
                         if (!panel) { panel = document.createElement('div'); panel.id = 'edge-info-panel'; document.body.appendChild(panel); }
                         panel.style.cssText = 'position:fixed;top:90px;right:20px;width:400px;max-height:calc(100vh - 110px);overflow-y:auto;z-index:9990;' +
-                        'background:rgba(255,255,255,0.95);border:1px solid rgba(255,215,0,0.6);border-radius:16px;padding:0;' +
-                        'font-family:Inter,Segoe UI,Roboto,sans-serif;box-shadow:0 20px 60px rgba(0,0,0,0.15);backdrop-filter:blur(20px);';
+                            'background:rgba(255,255,255,0.95);border:1px solid rgba(255,215,0,0.6);border-radius:16px;padding:0;' +
+                            'font-family:Inter,Segoe UI,Roboto,sans-serif;box-shadow:0 20px 60px rgba(0,0,0,0.15);backdrop-filter:blur(20px);';
+
                         var nodeData = nodesDS.get(nodeId);
-                        var nodeName = nodeId; var nodeDefinition = ""; var nodeType = ""; var nodeFreq = ""; var nodeDegree = "";
+                        
+                        // FIX 5: Use nodeId directly as the primary name to avoid tooltip parsing truncation
+                        var nodeName = nodeId; 
+                        var nodeDefinition = ""; var nodeType = ""; var nodeFreq = ""; var nodeDegree = "";
+                        
                         if (nodeData && nodeData.title) {
-                            var htmlStr = nodeData.title.replace(/<br\s*\/?>/gi, '\n');
-                            var tmpDiv = document.createElement("div"); tmpDiv.innerHTML = htmlStr;
-                            var tooltipText = tmpDiv.textContent || tmpDiv.innerText || "";
-                            var defMatch = tooltipText.match(/Definition:\\s*(.+)/i); if (defMatch && defMatch[1]) { nodeDefinition = defMatch[1].trim(); }
-                            var typeMatch = tooltipText.match(/Type:\\s*(\\w+)/i); if (typeMatch && typeMatch[1]) { nodeType = typeMatch[1].trim(); }
-                            var freqMatch = tooltipText.match(/Frequency:\\s*(\\d+)/i); if (freqMatch && freqMatch[1]) { nodeFreq = freqMatch[1].trim(); }
-                            var degMatch = tooltipText.match(/Degree:\\s*(\\d+)/i); if (degMatch && degMatch[1]) { nodeDegree = degMatch[1].trim(); }
-                            var nameMatch = tooltipText.match(/^([^\\n]+)/); if (nameMatch) nodeName = nameMatch[1].replace(/<[^>]*>/g,'').trim();
+                            var tooltipText = nodeData.title;
+                            var defMatch = tooltipText.match(/Definition:\s*(.+)/i); if (defMatch && defMatch[1]) { nodeDefinition = defMatch[1].trim(); }
+                            var typeMatch = tooltipText.match(/Type:\s*(\w+)/i); if (typeMatch && typeMatch[1]) { nodeType = typeMatch[1].trim(); }
+                            var freqMatch = tooltipText.match(/Frequency:\s*(\d+)/i); if (freqMatch && freqMatch[1]) { nodeFreq = freqMatch[1].trim(); }
+                            var degMatch = tooltipText.match(/Degree:\s*(\d+)/i); if (degMatch && degMatch[1]) { nodeDegree = degMatch[1].trim(); }
                         }
+
                         var html = '<div style="padding:16px 20px;background:linear-gradient(135deg,rgba(255,215,0,0.15),rgba(255,183,77,0.1));border-radius:16px 16px 0 0;border-bottom:2px solid rgba(255,215,0,0.4);">';
-                        html += '<div style="font-size:18px;font-weight:800;color:#1e293b;margin-bottom:8px;">🔋 ' + nodeName + '</div>';
+                        // FIX 6: Added word-break and white-space normal to header to prevent truncation
+                        html += '<div style="font-size:18px;font-weight:800;color:#1e293b;margin-bottom:8px;word-break:break-word;white-space:normal;overflow:visible;">🔋 ' + nodeName + '</div>';
                         html += '<div style="display:flex;flex-wrap:wrap;gap:6px;">';
                         if (nodeType) html += '<span style="background:rgba(14,165,233,0.1);color:#0ea5e9;font-size:10px;padding:3px 8px;border-radius:10px;font-weight:600;">' + nodeType + '</span>';
                         if (nodeDegree) html += '<span style="background:rgba(168,85,247,0.1);color:#a855f7;font-size:10px;padding:3px 8px;border-radius:10px;font-weight:600;">Deg: ' + nodeDegree + '</span>';
                         if (nodeFreq) html += '<span style="background:rgba(34,197,94,0.1);color:#22c55e;font-size:10px;padding:3px 8px;border-radius:10px;font-weight:600;">Freq: ' + nodeFreq + '</span>';
                         html += '</div></div>';
+                        
                         if (nodeDefinition) {
                             html += '<div style="padding:12px 20px;background:rgba(251,191,36,0.06);border-bottom:1px solid rgba(0,0,0,0.04);">';
                             html += '<div style="font-size:10px;color:#94a3b8;font-weight:600;text-transform:uppercase;margin-bottom:4px;">📖 Definition</div>';
-                            html += '<div style="font-size:12px;color:#475569;font-style:italic;line-height:1.4;">' + nodeDefinition + '</div></div>';
+                            html += '<div style="font-size:12px;color:#475569;font-style:italic;line-height:1.4;word-break:break-word;">' + nodeDefinition + '</div></div>';
                         }
+                        
                         html += '<div style="padding:10px 20px;background:rgba(248,250,252,0.8);border-bottom:1px solid rgba(0,0,0,0.04);display:flex;align-items:center;gap:10px;">';
                         html += '<span style="font-size:10px;color:#94a3b8;font-weight:600;">Label Mode</span>';
                         html += '<button id="btn-short" onclick="window._heaSetLabelMode(\'short\')" style="padding:4px 10px;border:none;border-radius:6px;font-size:10px;font-weight:700;cursor:pointer;background:#D32F2F;color:white;">Short</button>';
                         html += '<button id="btn-full" onclick="window._heaSetLabelMode(\'full\')" style="padding:4px 10px;border:none;border-radius:6px;font-size:10px;font-weight:700;cursor:pointer;background:transparent;color:#64748b;">Full</button>';
                         html += '</div>';
+                        
                         html += '<div id="edges-container" style="padding:12px 16px 16px;">';
                         var edgeList = [];
                         connectedEdges.forEach(function(eId) {
@@ -3993,10 +3946,8 @@ div.vis-network div.vis-node div.vis-label {{
                             var w = (typeof e.value === 'number') ? e.value : (e.width || 1);
                             var edgeType = 'unknown', isInferred = false;
                             if (e.title) {
-                                var edgeHtml = e.title.replace(/<br\s*\/?>/gi, '\n');
-                                var tmpDiv = document.createElement('div'); tmpDiv.innerHTML = edgeHtml;
-                                var _txt = tmpDiv.textContent || tmpDiv.innerText || '';
-                                var m = _txt.match(/Type:\\s*(\\w+)/); if (m) edgeType = m[1];
+                                var _txt = e.title;
+                                var m = _txt.match(/Type:\s*(\w+)/); if (m) edgeType = m[1];
                                 if (_txt.indexOf('Inferred: true') !== -1) isInferred = true;
                             }
                             edgeList.push({from: fromLabel, to: toLabel, weight: (typeof w === 'number') ? w.toFixed(2) : String(w), type: edgeType, inferred: isInferred});
@@ -4004,6 +3955,7 @@ div.vis-network div.vis-node div.vis-label {{
                         edgeList.sort(function(a,b){ return parseFloat(b.weight)-parseFloat(a.weight); });
                         edgeList.forEach(function(e, idx){ html += formatEdgeRow(e, idx, labelMode); });
                         html += '</div>';
+                        
                         panel.innerHTML = html; panel.style.display = 'block'; panel._edgeList = edgeList;
                         window._heaSetLabelMode = function(mode) {
                             labelMode = mode; var p = document.getElementById('edge-info-panel');
@@ -4015,6 +3967,7 @@ div.vis-network div.vis-node div.vis-label {{
                             if (container) { var newHtml = ''; p._edgeList.forEach(function(e, idx){ newHtml += formatEdgeRow(e, idx, mode); }); container.innerHTML = newHtml; }
                         };
                     }
+
                     network.on("selectNode", function(params) {
                         var nodeId = params.nodes[0];
                         if (nodeId === "__legend__") { network.unselectAll(); return; }
@@ -4044,9 +3997,6 @@ div.vis-network div.vis-node div.vis-label {{
         """
         html_content = html_content.replace('</body>', highlight_js + '</body>')
 
-    # Layer 4: Iframe height — 950px gives ~160px buffer for bottom-edge tooltips
-    # Layer 5: Edge info panel z-index — must stay BELOW tooltip z-index (10000)
-    # The edge panel is already fixed at z-index:9999 in the highlight_js; tooltip CSS sets z-index:10000.
     st.components.v1.html(html_content, height=950, scrolling=True)
 
     if use_abbreviated_labels and label_map:
@@ -4057,7 +4007,8 @@ div.vis-network div.vis-node div.vis-label {{
         for i, (short, full) in enumerate(sorted_legend):
             with cols[i % 4]:
                 st.markdown(f"""<div class='hea-legend' style='padding:8px; border-radius:6px; background-color:{theme.get('tooltip_bg', '#f8fafc')}; border-left:4px solid {theme.get('highlight_bg', '#ff6b6b')}; margin-bottom:6px;'>
-                <b style='color:{theme.get('highlight_bg', '#ff6b6b')}; font-size:{node_legend_font_size+1}px;'>{short}</b>: <span style='font-size:{node_legend_font_size}px; color:{theme.get('font', '#1e293b')};'>{full}</span></div>""", unsafe_allow_html=True)
+<b style='color:{theme.get('highlight_bg', '#ff6b6b')}; font-size:{node_legend_font_size+1}px;'>{short}</b>: <span style='font-size:{node_legend_font_size}px; color:{theme.get('font', '#1e293b')}; word-break:break-word;'>{full}</span></div>""", unsafe_allow_html=True)
+
 def render_graph_plotly_2d(
     nx_graph, concept_abstract_map, cmap_name="viridis",
     custom_labels=None, top_n_nodes=0, node_label_size=10,
