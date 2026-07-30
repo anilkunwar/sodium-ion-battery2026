@@ -3693,18 +3693,24 @@ def render_pyvis_graph(
         concept_type = nx_graph.nodes[node].get('concept_type', 'general')
         definition = nx_graph.nodes[node].get('definition', '')
 
+        # Layer 1: Content capping — prevent unbounded tooltip growth
+        _def_display = ""
+        if show_definitions and definition:
+            _def_display = definition[:180] + "..." if len(definition) > 180 else definition
+        _full_label_display = ""
+        if use_abbreviated_labels and label != original_label:
+            _full_label_display = original_label
+
         tooltip_content = (
-            f"<div style='font-family:{node_font_face};'>"
+            f"<div style='font-family:{node_font_face};max-width:520px;max-height:260px;overflow:auto;'>"
             f"<b style='font-size:14px;color:{theme['highlight_bg']};'>{node}</b><br>"
             f"<span style='color:{theme['tooltip_text']};opacity:0.7;'>Type:</span> {concept_type}<br>"
             f"<span style='color:{theme['tooltip_text']};opacity:0.7;'>Degree:</span> {degree}<br>"
             f"<span style='color:{theme['tooltip_text']};opacity:0.7;'>Frequency:</span> {freq}"
+            + (f"<br><span style='color:{theme['tooltip_text']};opacity:0.7;'>Definition:</span> <i>{_def_display}</i>" if _def_display else "")
+            + (f"<br><span style='color:{theme['tooltip_text']};opacity:0.7;'>Full Label:</span> {_full_label_display}" if _full_label_display else "")
+            + "</div>"
         )
-        if show_definitions and definition:
-            tooltip_content += f"<br><span style='color:{theme['tooltip_text']};opacity:0.7;'>Definition:</span> <i>{definition}</i>"
-        if use_abbreviated_labels and label != original_label:
-            tooltip_content += f"<br><span style='color:{theme['tooltip_text']};opacity:0.7;'>Full Label:</span> {original_label}"
-        tooltip_content += "</div>"
 
         net.add_node(node, label=label, size=size, 
                      color={'background': color, 'border': theme['node_border'],
@@ -3745,7 +3751,7 @@ def render_pyvis_graph(
             value=float(np.clip(w, 0.5, 5)), width=width,
             color={'color': base_color, 'highlight': theme['highlight_bg'], 'hover': theme['hover_bg'], 'opacity': 0.85},
             smooth={"type": "dynamic"},
-            title=f"<span style='font-family:{node_font_face};'>Weight: <b>{w:.2f}</b><br>Type: {edge_type}<br>Inferred: {is_inferred}</span>",
+            title=f"<span style='font-family:{node_font_face};display:block;max-width:400px;'>Weight: <b>{w:.2f}</b><br>Type: {edge_type}<br>Inferred: {is_inferred}</span>",
             dashes=dashes
         )
 
@@ -3796,63 +3802,82 @@ def render_pyvis_graph(
 body {{ background: {theme['bg']}; margin: 0; padding: 0; font-family: '{node_font_face}', sans-serif; }}
 #mynetwork {{ border-radius: 16px; box-shadow: 0 12px 48px {theme['shadow_color']}; outline: none; }}
 
-/* ===== TOOLTIP TRUNCATION FIX ===== */
-div.vis-tooltip,
-div.vis-tooltip *,
-div.vis-tooltip > div,
-div.vis-tooltip div,
-div.vis-tooltip span,
-div.vis-tooltip b,
-div.vis-tooltip i {{
-    max-width: 600px !important;
+/* ===== LAYER 2: Vis.js tooltip override =====
+   Targets: (a) the tooltip container itself, (b) its direct content wrapper.
+   Does NOT use '*'' to avoid corrupting inline elements.
+   max-height is SET (not removed) to keep tooltips within iframe bounds.
+   overflow-y: auto enables scrolling for the rare overflow case.
+   z-index ensures tooltips sit above the edge-info-panel (z=9999).
+*/
+div.vis-tooltip {{
+    max-width: 540px !important;
     width: auto !important;
+    max-height: 280px !important;
     height: auto !important;
-    max-height: none !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    z-index: 10000 !important;
     white-space: normal !important;
     word-wrap: break-word !important;
     overflow-wrap: break-word !important;
-    text-overflow: unset !important;
-    overflow: visible !important;
-    overflow-y: visible !important;
-    hyphens: auto !important;
-    line-height: 1.5 !important;
+    line-height: 1.45 !important;
+    padding: 10px 14px !important;
+    border-radius: 8px !important;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.25) !important;
 }}
 
-/* Optional: tooltip title styling */
-div.vis-tooltip > div:first-child {{
-    font-size: 15px !important;
+/* The direct child wrapper created by PyVis/our HTML */
+div.vis-tooltip > div {{
+    max-width: 520px !important;
+    width: auto !important;
+    max-height: 260px !important;
+    overflow: auto !important;
+}}
+
+/* Title <b> element — targeted directly, not via :first-child on wrapper */
+div.vis-tooltip b {{
+    font-size: 14px !important;
     font-weight: 700 !important;
-    margin-bottom: 8px !important;
-    padding-bottom: 5px !important;
+    display: inline-block !important;
+    margin-bottom: 4px !important;
     border-bottom: 2px solid {theme['highlight_bg']} !important;
+    padding-bottom: 2px !important;
     color: {theme['highlight_bg']} !important;
 }}
 
-/* ===== EDGE INFO PANEL — full text wrapping ===== */
-#edge-info-panel,
-#edge-info-panel * {{
-    max-width: 600px !important;
-    width: auto !important;
-    min-width: 280px !important;
-    white-space: normal !important;
-    word-wrap: break-word !important;
-    overflow-wrap: break-word !important;
-    text-overflow: unset !important;
-    overflow: visible !important;
-    word-break: break-word !important;
+/* Metadata labels (Type, Degree, etc.) */
+div.vis-tooltip span {{
+    font-size: 12px !important;
+    line-height: 1.4 !important;
 }}
 
-#edge-info-panel > div,
-#edge-info-panel .edges-container,
-#edge-info-panel .edge-row {{
-    white-space: normal !important;
-    word-break: break-word !important;
+/* Definition italic block */
+div.vis-tooltip i {{
+    font-size: 11px !important;
+    color: #555 !important;
+    line-height: 1.35 !important;
+    display: inline-block !important;
+    max-width: 500px !important;
 }}
 
 .hea-legend {{ font-size: {node_legend_font_size}px !important; }}
 </style>
 """
+    # Layer 3: Robust CSS injection — verify success, fallback to prepend-before-body
+if '</head>' in html_content:
     html_content = html_content.replace('</head>', custom_css + '</head>')
+elif '<head>' in html_content:
+    # Insert before closing head tag with possible whitespace/variant
+    html_content = re.sub(r'</head\s*>', custom_css + r'\g<0>', html_content, flags=re.I)
+else:
+    # Ultimate fallback: prepend right after <body> or at start
+    if '<body>' in html_content:
+        html_content = html_content.replace('<body>', '<body>' + custom_css)
+    else:
+        html_content = custom_css + html_content
+# Verify injection succeeded
+if 'div.vis-tooltip' not in html_content:
+    st.warning("Tooltip CSS injection failed — tooltips may render with default (clipped) styling.")
 
     if enable_node_highlight:
         highlight_js = r"""
@@ -3907,7 +3932,7 @@ div.vis-tooltip > div:first-child {{
                     function showEdgeInfoPanel(nodeId, connectedEdges) {
                         var panel = document.getElementById('edge-info-panel');
                         if (!panel) { panel = document.createElement('div'); panel.id = 'edge-info-panel'; document.body.appendChild(panel); }
-                        panel.style.cssText = 'position:fixed;top:90px;right:20px;width:auto;max-width:600px;min-width:280px;max-height:calc(100vh - 110px);overflow-y:auto;z-index:9999;' +
+                        panel.style.cssText = 'position:fixed;top:90px;right:20px;width:400px;max-height:calc(100vh - 110px);overflow-y:auto;z-index:9990;' +
                         'background:rgba(255,255,255,0.95);border:1px solid rgba(255,215,0,0.6);border-radius:16px;padding:0;' +
                         'font-family:Inter,Segoe UI,Roboto,sans-serif;box-shadow:0 20px 60px rgba(0,0,0,0.15);backdrop-filter:blur(20px);';
                         var nodeData = nodesDS.get(nodeId);
@@ -4000,7 +4025,10 @@ div.vis-tooltip > div:first-child {{
         """
         html_content = html_content.replace('</body>', highlight_js + '</body>')
 
-    st.components.v1.html(html_content, height=790, scrolling=True)
+    # Layer 4: Iframe height — 950px gives ~160px buffer for bottom-edge tooltips
+# Layer 5: Edge info panel z-index — must stay BELOW tooltip z-index (10000)
+# The edge panel is already fixed at z-index:9999 in the highlight_js; tooltip CSS sets z-index:10000.
+st.components.v1.html(html_content, height=950, scrolling=True)
 
     if use_abbreviated_labels and label_map:
         st.markdown("---")
