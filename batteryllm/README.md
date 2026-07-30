@@ -43,3 +43,8 @@ R8-R9 (Query Distilled Concept Graph Construction)
 [![meaningtowords](https://img.shields.io/badge/naionbatteryllmcg-v10.a-blue)](https://llm-guided-na-ion-battery-concept-graph10a.streamlit.app/) (Code 8c upgraded to prevent the truncation (node label truncation) of the titles of concepts in the "Concept Definition in Tooltips" Javascript html fronend [COMPLETE], Dynamic, query-conditioned topological and semantic re-weighting during ontology mapping procedure, Query-distilled option and takes query at first, The LLM learns from Concept Graph to Respond to the User's Query, The  subgraph is a pre-computed visualization tied to the problem category (e.g. anode_bottleneck), not dynamically constructed from the query content. This is why it appears generic and not distinct to the specific question about sodium vs lithium intercalation in graphite.)
 
 
+[![meaningtowords](https://img.shields.io/badge/naionbatteryllmcg-v100.0-blue)](https://llm-guided-na-ion-battery-concept-graph100.streamlit.app/) (Code 8c upgraded to prevent the truncation (node label truncation) of the titles of concepts in the "Concept Definition in Tooltips" Javascript html fronend [COMPLETE], Dynamic, query-conditioned topological and semantic re-weighting during ontology mapping procedure, Query-distilled option and takes query at first, The LLM learns from Concept Graph to Respond to the User's Query, The  subgraph is a pre-computed visualization tied to the problem category (e.g. anode_bottleneck), not dynamically constructed from the query content. This is why it appears generic and not distinct to the specific question about sodium vs lithium intercalation in graphite.)
+
+
+
+
