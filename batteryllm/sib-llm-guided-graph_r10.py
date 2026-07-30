@@ -3676,7 +3676,11 @@ def render_pyvis_graph(
         degree = int(nx_graph.degree(node))
         original_label = node
 
-        label = get_hierarchy_label(node, style="arrow") if node in _HIERARCHY_PARENTS else node
+        # Use hierarchy label for display if available, otherwise clean node name
+        if node in _HIERARCHY_PARENTS:
+            label = get_hierarchy_label(node, style="arrow")
+        else:
+            label = node.replace('_', ' ').title()
 
         if use_abbreviated_labels and len(original_label) > max_label_length:
             short_label = f"N{n_counter}"
@@ -3688,7 +3692,9 @@ def render_pyvis_graph(
             font_dict = {'color': '#ffffff', 'size': inside_font_size, 'face': node_font_face, 'bold': True}
         else:
             node_shape = 'dot'
-            font_dict = {'color': theme['font'], 'size': node_label_size, 'face': node_font_face, 'strokeWidth': 0, 'vadjust': -6}
+            # Ensure font size is large enough to read but not so large it forces truncation
+            display_font_size = max(10, min(int(node_label_size), 14))
+            font_dict = {'color': theme['font'], 'size': display_font_size, 'face': node_font_face, 'strokeWidth': 0, 'vadjust': -6}
 
         concept_type = nx_graph.nodes[node].get('concept_type', 'general')
         definition = nx_graph.nodes[node].get('definition', '')
@@ -3858,6 +3864,19 @@ div.vis-tooltip i {{
     line-height: 1.35 !important;
     display: inline-block !important;
     max-width: 500px !important;
+}}
+
+/* ===== NODE LABEL ANTI-TRUNCATION FIX =====
+   Vis.js defaults clip labels at ~node width. These rules ensure
+   full concept names (e.g., "sei_formation", "volume_expansion") render.
+*/
+div.vis-network div.vis-node div.vis-label {{
+    max-width: none !important;
+    width: auto !important;
+    white-space: nowrap !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    display: inline-block !important;
 }}
 
 .hea-legend {{ font-size: {node_legend_font_size}px !important; }}
@@ -6320,11 +6339,11 @@ def render_sidebar() -> None:
         if st.session_state['use_abbreviated_labels']:
             st.session_state['max_label_length'] = st.slider(
                 "Max label length before abbreviation",
-                min_value=2, max_value=50, value=15, step=1,
+                min_value=2, max_value=50, value=30, step=1,
                 help="Labels longer than this threshold will be replaced by N1, N2, etc.",
             )
         else:
-            st.session_state['max_label_length'] = 15
+            st.session_state['max_label_length'] = 30
         st.session_state['show_definitions'] = st.checkbox(
             "📖 Show concept definitions in tooltips",
             value=True,
