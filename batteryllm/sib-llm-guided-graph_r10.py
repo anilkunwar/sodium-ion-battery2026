@@ -3806,14 +3806,14 @@ div.vis-tooltip b,
 div.vis-tooltip i {{
     max-width: 600px !important;
     width: auto !important;
-    height: auto !important;                /* ← NEW */
-    max-height: none !important;            /* ← NEW */
+    height: auto !important;
+    max-height: none !important;
     white-space: normal !important;
     word-wrap: break-word !important;
     overflow-wrap: break-word !important;
     text-overflow: unset !important;
     overflow: visible !important;
-    overflow-y: visible !important;         /* ← NEW */
+    overflow-y: visible !important;
     hyphens: auto !important;
     line-height: 1.5 !important;
 }}
@@ -3826,6 +3826,27 @@ div.vis-tooltip > div:first-child {{
     padding-bottom: 5px !important;
     border-bottom: 2px solid {theme['highlight_bg']} !important;
     color: {theme['highlight_bg']} !important;
+}}
+
+/* ===== EDGE INFO PANEL — full text wrapping ===== */
+#edge-info-panel,
+#edge-info-panel * {{
+    max-width: 600px !important;
+    width: auto !important;
+    min-width: 280px !important;
+    white-space: normal !important;
+    word-wrap: break-word !important;
+    overflow-wrap: break-word !important;
+    text-overflow: unset !important;
+    overflow: visible !important;
+    word-break: break-word !important;
+}}
+
+#edge-info-panel > div,
+#edge-info-panel .edges-container,
+#edge-info-panel .edge-row {{
+    white-space: normal !important;
+    word-break: break-word !important;
 }}
 
 .hea-legend {{ font-size: {node_legend_font_size}px !important; }}
@@ -3886,7 +3907,7 @@ div.vis-tooltip > div:first-child {{
                     function showEdgeInfoPanel(nodeId, connectedEdges) {
                         var panel = document.getElementById('edge-info-panel');
                         if (!panel) { panel = document.createElement('div'); panel.id = 'edge-info-panel'; document.body.appendChild(panel); }
-                        panel.style.cssText = 'position:fixed;top:90px;right:20px;width:400px;max-height:calc(100vh - 110px);overflow-y:auto;z-index:9999;' +
+                        panel.style.cssText = 'position:fixed;top:90px;right:20px;width:auto;max-width:600px;min-width:280px;max-height:calc(100vh - 110px);overflow-y:auto;z-index:9999;' +
                         'background:rgba(255,255,255,0.95);border:1px solid rgba(255,215,0,0.6);border-radius:16px;padding:0;' +
                         'font-family:Inter,Segoe UI,Roboto,sans-serif;box-shadow:0 20px 60px rgba(0,0,0,0.15);backdrop-filter:blur(20px);';
                         var nodeData = nodesDS.get(nodeId);
