@@ -6535,7 +6535,7 @@ def render_sidebar() -> None:
         )
         # ADD THIS MISSING SLIDER:
         st.slider(
-            "Sunburst legend font size", 8, 20, 12, step=1,
+            "Sunburst legend font size", 8, 50, 24, step=1,
             help="Font size for the symbol-to-label legend below the sunburst chart.",
             key="sunburst_legend_font_size",
         )
