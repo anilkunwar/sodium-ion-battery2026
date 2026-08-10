@@ -49,7 +49,9 @@ R100  (concept graph only)
 
 R100  (LLM-query + concept graph + microtransformer = graphformer )
 
-[![meaningtowords](https://img.shields.io/badge/naionbatteryllmcgformer-v100.0-blue)](https://sodium-ion-battery-conceptllm-graphformer.streamlit.app/) (Version 10a with additional features such as - interactive concept graph downloadable, Node-label size changeable in the Concept Definition in Tooltips Frontend )
+[![meaningtowords](https://img.shields.io/badge/naionbatteryllmcgformer-v100.0-blue)](https://sodium-ion-battery-conceptllm-graphformer.streamlit.app/) (Generic, Version 10a with additional features such as - interactive concept graph downloadable, Node-label size changeable in the Concept Definition in Tooltips Frontend )
+
+[![meaningtowords](https://img.shields.io/badge/naionbatteryllmcgformer-v100.q1-blue)](https://sodium-ion-battery-conceptllm-q1graphformer.streamlit.app/) (Query specific to Q1, Version 10a with additional features such as - interactive concept graph downloadable, Node-label size changeable in the Concept Definition in Tooltips Frontend )
 
 
 
